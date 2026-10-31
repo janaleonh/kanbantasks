@@ -1,0 +1,61 @@
+name: Build Unsigned iOS IPA (Sideloadly / AltStore)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  build-ipa:
+    name: Build iOS .ipa on macOS
+    runs-on: macos-15
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Generate Native iOS Project (Expo Prebuild)
+        env:
+          CI: "1"
+        run: npx expo prebuild --platform ios --clean
+
+      - name: Build Unsigned Release .app via Xcode
+        run: |
+          cd ios
+          WORKSPACE=$(ls -d *.xcworkspace | head -n 1)
+          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          echo "Building workspace: $WORKSPACE with scheme: $SCHEME"
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            build
+
+      - name: Package .app into KanbanTasks.ipa
+        run: |
+          mkdir -p Payload
+          cp -r ios/build/Build/Products/Release-iphoneos/*.app Payload/
+          zip -r9 KanbanTasks.ipa Payload
+
+      - name: Upload KanbanTasks.ipa Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KanbanTasks-unsigned-ipa
+          path: KanbanTasks.ipa
+          retention-days: 30
