@@ -39,21 +39,28 @@ jobs:
             const fs = require("fs");
             const base = "node_modules/expo-modules-jsi/apple";
 
-            // 1. Package.swift
+            // 1. Package.swift: keep Swift 6 + upcoming features as designed, only remove -Werror flags
             let pkg = fs.readFileSync(base + "/Package.swift", "utf8");
-            pkg = pkg.replace("swiftLanguageModes: [.v6]", "swiftLanguageModes: [.v5]");
-            pkg = pkg.replace(".enableUpcomingFeature(\"NonisolatedNonsendingByDefault\"),", "");
-            pkg = pkg.replace(".enableUpcomingFeature(\"InferIsolatedConformances\"),", "");
             pkg = pkg.replace(/\s*\"-Werror\",\s*\"[A-Za-z]+\",/g, "");
             fs.writeFileSync(base + "/Package.swift", pkg);
 
-            // 2. JavaScriptObject.swift
+            // 2. JavaScriptRuntime.swift: replace bare-slash regex literal with Regex(...)
+            let rt = fs.readFileSync(base + "/Sources/ExpoModulesJSI/Runtime/JavaScriptRuntime.swift", "utf8");
+            rt = rt.replace("name.wholeMatch(of: /^[a-zA-Z_$][a-zA-Z0-9_$]*$/)", "name.wholeMatch(of: try! Regex(#\"^[a-zA-Z_$][a-zA-Z0-9_$]*$\"#))");
+            fs.writeFileSync(base + "/Sources/ExpoModulesJSI/Runtime/JavaScriptRuntime.swift", rt);
+
+            // 3. JavaScriptPromise.swift: add nonisolated init() to LongLivedState
+            let prom = fs.readFileSync(base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptPromise.swift", "utf8");
+            prom = prom.replace("func allowRelease() {", "nonisolated init() {}\n\n    func allowRelease() {");
+            fs.writeFileSync(base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptPromise.swift", prom);
+
+            // 4. JavaScriptObject.swift: wrap slot pointer in UncheckedSendable
             let obj = fs.readFileSync(base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptObject.swift", "utf8");
             obj = obj.replace("nonisolated(unsafe) let slot = buffer.baseAddress!", "nonisolated(unsafe) let slot = buffer.baseAddress!\n    let sendableSlot = UncheckedSendable(slot)");
             obj = obj.replace("try encode(JavaScriptValue.Slot(slot), runtime)", "try encode(JavaScriptValue.Slot(sendableSlot.value), runtime)");
             fs.writeFileSync(base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptObject.swift", obj);
 
-            // 3. JavaScriptFunction.swift
+            // 5. JavaScriptFunction.swift: wrap arguments and result pointers in UncheckedSendable
             let fn = fs.readFileSync(base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptFunction.swift", "utf8");
             fn = fn.replace("nonisolated(unsafe) let arguments = storage.baseAddress!", "let arguments = UncheckedSendable(storage.baseAddress!)");
             fn = fn.replace("nonisolated(unsafe) let result = arguments + argumentCount", "let result = UncheckedSendable(arguments.value + argumentCount)");
@@ -64,7 +71,7 @@ jobs:
             fn = fn.replace("JavaScriptUnownedValue(runtime.pointee, result), runtime)", "JavaScriptUnownedValue(runtime.pointee, result.value), runtime)");
             fs.writeFileSync(base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptFunction.swift", fn);
 
-            // 4. JavaScriptValuesBuffer.swift
+            // 6. JavaScriptValuesBuffer.swift: wrap start pointer in UncheckedSendable
             let buf = fs.readFileSync(base + "/Sources/ExpoModulesJSI/Runtime/JavaScriptValuesBuffer.swift", "utf8");
             buf = buf.replace("let start = storage.baseAddress", "let start = UncheckedSendable(storage.baseAddress)");
             buf = buf.replace("if let start {", "if let ptr = start.value {");
@@ -73,7 +80,7 @@ jobs:
             buf = buf.replace("start: start,", "start: start.value,");
             fs.writeFileSync(base + "/Sources/ExpoModulesJSI/Runtime/JavaScriptValuesBuffer.swift", buf);
 
-            // 5. build-xcframework.sh (show verbose logs instead of -quiet)
+            // 7. build-xcframework.sh: remove -quiet for clear logs
             let sh = fs.readFileSync(base + "/scripts/build-xcframework.sh", "utf8");
             sh = sh.replace("    -quiet \\\n", "");
             fs.writeFileSync(base + "/scripts/build-xcframework.sh", sh);
