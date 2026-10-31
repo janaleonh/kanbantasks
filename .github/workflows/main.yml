@@ -30,6 +30,45 @@ jobs:
       - name: Install Dependencies
         run: npm install --legacy-peer-deps
 
+      - name: Patch ExpoModulesJSI Swift 6.2 Concurrency Issue
+        run: |
+          python3 - << 'EOF'
+          import os
+
+          pkg_path = "node_modules/expo-modules-jsi/apple/Package.swift"
+          if os.path.exists(pkg_path):
+              txt = open(pkg_path).read()
+              txt = txt.replace("swiftLanguageModes: [.v6]", "swiftLanguageModes: [.v5]")
+              open(pkg_path, "w").write(txt)
+
+          obj_path = "node_modules/expo-modules-jsi/apple/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptObject.swift"
+          if os.path.exists(obj_path):
+              txt = open(obj_path).read()
+              txt = txt.replace(
+                  "nonisolated(unsafe) let slot = buffer.baseAddress!",
+                  "nonisolated(unsafe) let slot = buffer.baseAddress!\n    let sendableSlot = UncheckedSendable(slot)"
+              ).replace(
+                  "try encode(JavaScriptValue.Slot(slot), runtime)",
+                  "try encode(JavaScriptValue.Slot(sendableSlot.value), runtime)"
+              )
+              open(obj_path, "w").write(txt)
+
+          fn_path = "node_modules/expo-modules-jsi/apple/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptFunction.swift"
+          if os.path.exists(fn_path):
+              txt = open(fn_path).read()
+              txt = txt.replace(
+                  "nonisolated(unsafe) let result = arguments + argumentCount",
+                  "nonisolated(unsafe) let result = arguments + argumentCount\n      let sendableArguments = UncheckedSendable(arguments)\n      let sendableResult = UncheckedSendable(result)"
+              ).replace(
+                  "JavaScriptValuesBuffer(runtime, start: arguments, count: argumentCount)",
+                  "JavaScriptValuesBuffer(runtime, start: sendableArguments.value, count: argumentCount)"
+              ).replace(
+                  "JavaScriptUnownedValue(runtime.pointee, result)",
+                  "JavaScriptUnownedValue(runtime.pointee, sendableResult.value)"
+              )
+              open(fn_path, "w").write(txt)
+          EOF
+
       - name: Generate Native iOS Project (Expo Prebuild)
         env:
           CI: "1"
@@ -38,7 +77,7 @@ jobs:
       - name: Disable Code Signing in Podfile & Install Pods
         run: |
           cd ios
-          python3 -c '
+          python3 - << 'EOF'
           p = open("Podfile").read()
           patch = """
             installer.pods_project.targets.each do |target|
@@ -52,12 +91,13 @@ jobs:
           """
           p = p.replace("post_install do |installer|", "post_install do |installer|\n" + patch)
           open("Podfile", "w").write(p)
-          '
+          EOF
           pod install
 
       - name: Build Unsigned Release .app via Xcode
         run: |
           set -o pipefail
+          export NODE_BINARY=$(which node)
           cd ios
           WORKSPACE=$(ls -d *.xcworkspace | head -n 1)
           SCHEME=$(basename "$WORKSPACE" .xcworkspace)
@@ -74,11 +114,15 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             EXPANDED_CODE_SIGN_IDENTITY="" \
             CODE_SIGN_ENTITLEMENTS="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
             COMPILER_INDEX_STORE_ENABLE=NO \
             build 2>&1 | tee xcodebuild.log; then
             echo "=== XCODE ERRORS ==="
-            grep -E "error:|fatal error:" xcodebuild.log | tail -n 40 || true
+            grep -E "error:|fatal error:|Error:|Unable to resolve|PhaseScriptExecution" xcodebuild.log | tail -n 50 || true
+            echo "=== LAST 40 LINES ==="
+            tail -n 40 xcodebuild.log || true
             exit 1
           fi
 
