@@ -33,23 +33,25 @@ jobs:
       - name: Install Dependencies
         run: npm install --legacy-peer-deps
 
-      - name: Patch expo-modules-jsi for Swift 6.2 (no strict concurrency errors)
+      - name: Patch expo-modules-jsi for Swift 6.2 (Xcode 26.3 compatibility)
         run: |
           python3 - << 'EOF'
-          import re, sys
+          import re
 
           base = "node_modules/expo-modules-jsi/apple"
 
-          # 1) Package.swift: Swift 5 language mode (data-race "sending" diagnostics are not errors there)
-          #    and drop the -Werror flags, which only make newer compilers fail on harmless warnings.
+          # 1) Package.swift: use Swift 5 language mode, disable upcoming strict isolation features,
+          #    and remove -Werror flags so warnings don't abort compilation.
           p = base + "/Package.swift"
           t = open(p).read()
           t = t.replace("swiftLanguageModes: [.v6]", "swiftLanguageModes: [.v5]")
+          t = t.replace('.enableUpcomingFeature("NonisolatedNonsendingByDefault"),', "")
+          t = t.replace('.enableUpcomingFeature("InferIsolatedConformances"),', "")
           t = re.sub(r'\s*"-Werror",\s*"[A-Za-z]+",', "", t)
           open(p, "w").write(t)
           assert ".v5" in t, "Package.swift patch failed"
 
-          # 2) JavaScriptObject.swift: wrap pointer in UncheckedSendable
+          # 2) JavaScriptObject.swift: wrap slot pointer in UncheckedSendable
           p = base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptObject.swift"
           t = open(p).read()
           t = t.replace(
@@ -61,12 +63,95 @@ jobs:
               "try encode(JavaScriptValue.Slot(sendableSlot.value), runtime)",
           )
           open(p, "w").write(t)
-          assert "sendableSlot.value" in t, "JavaScriptObject patch failed"
+          assert "sendableSlot.value" in t, "JavaScriptObject.swift patch failed"
 
-          print("Patches applied OK")
+          # 3) JavaScriptFunction.swift: wrap arguments and result pointers in UncheckedSendable
+          p = base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptFunction.swift"
+          t = open(p).read()
+          old_fn = """      nonisolated(unsafe) let arguments = storage.baseAddress!
+      nonisolated(unsafe) let result = arguments + argumentCount
+      for index in 0...argumentCount {
+        expo.emplaceUndefined(arguments + index)
+      }
+      defer {
+        expo.destroyValues(arguments, argumentCount + 1)
+      }
+      try JavaScriptActor.assumeIsolated {
+        try emplacing(JavaScriptValuesBuffer(runtime, start: arguments, count: argumentCount), runtime)
+      }
+      try throwCppErrorUnlessSucceeded(
+        expo.callFunctionInto(runtime.pointee, pointee, arguments, argumentCount, result)
+      )
+      try JavaScriptActor.assumeIsolated {
+        try withResult(JavaScriptUnownedValue(runtime.pointee, result), runtime)
+      }"""
+          new_fn = """      let arguments = UncheckedSendable(storage.baseAddress!)
+      let result = UncheckedSendable(arguments.value + argumentCount)
+      for index in 0...argumentCount {
+        expo.emplaceUndefined(arguments.value + index)
+      }
+      defer {
+        expo.destroyValues(arguments.value, argumentCount + 1)
+      }
+      try JavaScriptActor.assumeIsolated {
+        try emplacing(JavaScriptValuesBuffer(runtime, start: arguments.value, count: argumentCount), runtime)
+      }
+      try throwCppErrorUnlessSucceeded(
+        expo.callFunctionInto(runtime.pointee, pointee, arguments.value, argumentCount, result.value)
+      )
+      try JavaScriptActor.assumeIsolated {
+        try withResult(JavaScriptUnownedValue(runtime.pointee, result.value), runtime)
+      }"""
+          assert old_fn in t, "JavaScriptFunction.swift target not found"
+          t = t.replace(old_fn, new_fn)
+          open(p, "w").write(t)
+
+          # 4) JavaScriptValuesBuffer.swift: wrap start pointer in UncheckedSendable
+          p = base + "/Sources/ExpoModulesJSI/Runtime/JavaScriptValuesBuffer.swift"
+          t = open(p).read()
+          old_buf = """      let start = storage.baseAddress
+      if let start {
+        for index in 0..<count {
+          expo.emplaceUndefined(start + index)
+        }
+      }
+      defer {
+        if let start {
+          expo.destroyValues(start, count)
+        }
+      }
+      let buffer = JavaScriptValuesBuffer(runtime, start: start, count: count)
+      try JavaScriptActor.assumeIsolated {
+        try emplaceValues(buffer, runtime)
+      }
+      return try body(buffer)"""
+          new_buf = """      let start = UncheckedSendable(storage.baseAddress)
+      if let ptr = start.value {
+        for index in 0..<count {
+          expo.emplaceUndefined(ptr + index)
+        }
+      }
+      defer {
+        if let ptr = start.value {
+          expo.destroyValues(ptr, count)
+        }
+      }
+      try JavaScriptActor.assumeIsolated {
+        try emplaceValues(JavaScriptValuesBuffer(runtime, start: start.value, count: count), runtime)
+      }
+      return try body(JavaScriptValuesBuffer(runtime, start: start.value, count: count))"""
+          assert old_buf in t, "JavaScriptValuesBuffer.swift target not found"
+          t = t.replace(old_buf, new_buf)
+          open(p, "w").write(t)
+
+          # 5) build-xcframework.sh: remove -quiet so any compiler output is visible immediately
+          p = base + "/scripts/build-xcframework.sh"
+          t = open(p).read()
+          t = t.replace("    -quiet \\\n", "")
+          open(p, "w").write(t)
+
+          print("All ExpoModulesJSI patches applied successfully!")
           EOF
-          echo "---- Package.swift (flags) ----"
-          grep -n "swiftLanguageModes\|Werror" node_modules/expo-modules-jsi/apple/Package.swift || true
 
       - name: Generate Native iOS Project (Expo Prebuild)
         env:
@@ -92,6 +177,12 @@ jobs:
           open("Podfile", "w").write(p)
           EOF
           pod install
+
+      - name: Prebuild ExpoModulesJSI.xcframework (isolated step with clear log)
+        run: |
+          export PODS_ROOT="$PWD/ios/Pods"
+          export PLATFORM_NAME="iphoneos"
+          bash node_modules/expo-modules-jsi/apple/scripts/build-xcframework.sh
 
       - name: Build Unsigned Release .app via Xcode
         run: |
@@ -123,15 +214,17 @@ jobs:
         if: failure()
         run: |
           {
-            echo "## Xcode error summary"
+            echo "## Xcode error summary (short)"
             echo '```'
-            echo "--- error lines ---"
-            grep -n "error" ios/xcodebuild.log | grep -v "^.*note:" | head -n 60 || true
+            echo "--- compiler / script errors ---"
+            grep -nE "error:|: error |fatal error|did not produce|No such module|cannot find|\*\* BUILD FAILED|failed with exit code" ios/xcodebuild.log | cut -c1-400 | head -n 40 || true
             echo
-            echo "--- ExpoModulesJSI build script output ---"
-            awk '/PhaseScriptExecution .*Build.*ExpoModulesJSI/{f=1} f' ios/xcodebuild.log | grep -v "^note:" | head -n 150 || true
+            echo "--- Last 80 lines of xcodebuild.log ---"
+            tail -n 80 ios/xcodebuild.log | cut -c1-400 || true
             echo '```'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
+          } > error-summary.txt
+          cat error-summary.txt
+          cat error-summary.txt >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Build Log on Failure
         if: failure()
