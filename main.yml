@@ -1,0 +1,103 @@
+name: Build Unsigned iOS IPA (Sideloadly / AltStore)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  build-ipa:
+    name: Build iOS .ipa on macOS
+    runs-on: macos-15
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Select latest Xcode on runner
+        run: |
+          LATEST_XCODE=$(ls -d /Applications/Xcode*.app | sort -V | tail -n 1)
+          echo "Using Xcode: $LATEST_XCODE"
+          sudo xcode-select -s "$LATEST_XCODE"
+          xcodebuild -version
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Generate Native iOS Project (Expo Prebuild)
+        env:
+          CI: "1"
+        run: npx expo prebuild --platform ios --clean --no-install
+
+      - name: Disable Code Signing in Podfile & Install Pods
+        run: |
+          cd ios
+          python3 -c '
+          p = open("Podfile").read()
+          patch = """
+            installer.pods_project.targets.each do |target|
+              target.build_configurations.each do |config|
+                config.build_settings["CODE_SIGNING_ALLOWED"] = "NO"
+                config.build_settings["CODE_SIGNING_REQUIRED"] = "NO"
+                config.build_settings["CODE_SIGN_IDENTITY"] = ""
+                config.build_settings["EXPANDED_CODE_SIGN_IDENTITY"] = ""
+              end
+            end
+          """
+          p = p.replace("post_install do |installer|", "post_install do |installer|\n" + patch)
+          open("Podfile", "w").write(p)
+          '
+          pod install
+
+      - name: Build Unsigned Release .app via Xcode
+        run: |
+          set -o pipefail
+          cd ios
+          WORKSPACE=$(ls -d *.xcworkspace | head -n 1)
+          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          echo "Building workspace: $WORKSPACE with scheme: $SCHEME"
+          if ! xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            EXPANDED_CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            build 2>&1 | tee xcodebuild.log; then
+            echo "=== XCODE ERRORS ==="
+            grep -E "error:|fatal error:" xcodebuild.log | tail -n 40 || true
+            exit 1
+          fi
+
+      - name: Upload Build Log on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-error-log
+          path: ios/xcodebuild.log
+
+      - name: Package .app into KanbanTasks.ipa
+        run: |
+          mkdir -p Payload
+          cp -r ios/build/Build/Products/Release-iphoneos/*.app Payload/
+          zip -r9 KanbanTasks.ipa Payload
+
+      - name: Upload KanbanTasks.ipa Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KanbanTasks-unsigned-ipa
+          path: KanbanTasks.ipa
+          retention-days: 30
