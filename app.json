@@ -1,0 +1,44 @@
+{
+  "expo": {
+    "name": "Kanban Tasks",
+    "slug": "kanban-tasks",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "runtimeVersion": {
+      "policy": "sdkVersion"
+    },
+    "scheme": [
+      "kanban-tasks",
+      "com.googleusercontent.apps.957410363710-o0pllt9lsun0r806ogr3hcojrbnf7n72"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.janasue.kanbantasks",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      "expo-secure-store",
+      "expo-notifications"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "246e8c30-5044-48c4-8e5a-34c8ca8aded4"
+      }
+    },
+    "owner": "janasue"
+  }
+}
