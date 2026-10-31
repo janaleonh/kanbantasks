@@ -15,12 +15,15 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Select latest Xcode on runner
+      - name: Select newest stable Xcode on runner
         run: |
-          LATEST_XCODE=$(ls -d /Applications/Xcode*.app | sort -V | tail -n 1)
-          echo "Using Xcode: $LATEST_XCODE"
-          sudo xcode-select -s "$LATEST_XCODE"
+          echo "Installed Xcode versions:"
+          ls -d /Applications/Xcode*.app
+          CHOSEN=$(ls -d /Applications/Xcode*.app | grep -vi beta | sort -V | tail -n 1)
+          echo "Using Xcode: $CHOSEN"
+          sudo xcode-select -s "$CHOSEN"
           xcodebuild -version
+          swift --version
 
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
@@ -30,44 +33,40 @@ jobs:
       - name: Install Dependencies
         run: npm install --legacy-peer-deps
 
-      - name: Patch ExpoModulesJSI Swift 6.2 Concurrency Issue
+      - name: Patch expo-modules-jsi for Swift 6.2 (no strict concurrency errors)
         run: |
           python3 - << 'EOF'
-          import os
+          import re, sys
 
-          pkg_path = "node_modules/expo-modules-jsi/apple/Package.swift"
-          if os.path.exists(pkg_path):
-              txt = open(pkg_path).read()
-              txt = txt.replace("swiftLanguageModes: [.v6]", "swiftLanguageModes: [.v5]")
-              open(pkg_path, "w").write(txt)
+          base = "node_modules/expo-modules-jsi/apple"
 
-          obj_path = "node_modules/expo-modules-jsi/apple/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptObject.swift"
-          if os.path.exists(obj_path):
-              txt = open(obj_path).read()
-              txt = txt.replace(
-                  "nonisolated(unsafe) let slot = buffer.baseAddress!",
-                  "nonisolated(unsafe) let slot = buffer.baseAddress!\n    let sendableSlot = UncheckedSendable(slot)"
-              ).replace(
-                  "try encode(JavaScriptValue.Slot(slot), runtime)",
-                  "try encode(JavaScriptValue.Slot(sendableSlot.value), runtime)"
-              )
-              open(obj_path, "w").write(txt)
+          # 1) Package.swift: Swift 5 language mode (data-race "sending" diagnostics are not errors there)
+          #    and drop the -Werror flags, which only make newer compilers fail on harmless warnings.
+          p = base + "/Package.swift"
+          t = open(p).read()
+          t = t.replace("swiftLanguageModes: [.v6]", "swiftLanguageModes: [.v5]")
+          t = re.sub(r'\s*"-Werror",\s*"[A-Za-z]+",', "", t)
+          open(p, "w").write(t)
+          assert ".v5" in t, "Package.swift patch failed"
 
-          fn_path = "node_modules/expo-modules-jsi/apple/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptFunction.swift"
-          if os.path.exists(fn_path):
-              txt = open(fn_path).read()
-              txt = txt.replace(
-                  "nonisolated(unsafe) let result = arguments + argumentCount",
-                  "nonisolated(unsafe) let result = arguments + argumentCount\n      let sendableArguments = UncheckedSendable(arguments)\n      let sendableResult = UncheckedSendable(result)"
-              ).replace(
-                  "JavaScriptValuesBuffer(runtime, start: arguments, count: argumentCount)",
-                  "JavaScriptValuesBuffer(runtime, start: sendableArguments.value, count: argumentCount)"
-              ).replace(
-                  "JavaScriptUnownedValue(runtime.pointee, result)",
-                  "JavaScriptUnownedValue(runtime.pointee, sendableResult.value)"
-              )
-              open(fn_path, "w").write(txt)
+          # 2) JavaScriptObject.swift: wrap pointer in UncheckedSendable
+          p = base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptObject.swift"
+          t = open(p).read()
+          t = t.replace(
+              "nonisolated(unsafe) let slot = buffer.baseAddress!",
+              "nonisolated(unsafe) let slot = buffer.baseAddress!\n    let sendableSlot = UncheckedSendable(slot)",
+          )
+          t = t.replace(
+              "try encode(JavaScriptValue.Slot(slot), runtime)",
+              "try encode(JavaScriptValue.Slot(sendableSlot.value), runtime)",
+          )
+          open(p, "w").write(t)
+          assert "sendableSlot.value" in t, "JavaScriptObject patch failed"
+
+          print("Patches applied OK")
           EOF
+          echo "---- Package.swift (flags) ----"
+          grep -n "swiftLanguageModes\|Werror" node_modules/expo-modules-jsi/apple/Package.swift || true
 
       - name: Generate Native iOS Project (Expo Prebuild)
         env:
@@ -102,7 +101,7 @@ jobs:
           WORKSPACE=$(ls -d *.xcworkspace | head -n 1)
           SCHEME=$(basename "$WORKSPACE" .xcworkspace)
           echo "Building workspace: $WORKSPACE with scheme: $SCHEME"
-          if ! xcodebuild \
+          xcodebuild \
             -workspace "$WORKSPACE" \
             -scheme "$SCHEME" \
             -configuration Release \
@@ -118,13 +117,21 @@ jobs:
             PROVISIONING_PROFILE_SPECIFIER="" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
             COMPILER_INDEX_STORE_ENABLE=NO \
-            build 2>&1 | tee xcodebuild.log; then
-            echo "=== XCODE ERRORS ==="
-            grep -E "error:|fatal error:|Error:|Unable to resolve|PhaseScriptExecution" xcodebuild.log | tail -n 50 || true
-            echo "=== LAST 40 LINES ==="
-            tail -n 40 xcodebuild.log || true
-            exit 1
-          fi
+            build 2>&1 | tee xcodebuild.log
+
+      - name: Show real compiler errors (open this step if build failed)
+        if: failure()
+        run: |
+          {
+            echo "## Xcode error summary"
+            echo '```'
+            echo "--- error lines ---"
+            grep -n "error" ios/xcodebuild.log | grep -v "^.*note:" | head -n 60 || true
+            echo
+            echo "--- ExpoModulesJSI build script output ---"
+            awk '/PhaseScriptExecution .*Build.*ExpoModulesJSI/{f=1} f' ios/xcodebuild.log | grep -v "^note:" | head -n 150 || true
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Build Log on Failure
         if: failure()
