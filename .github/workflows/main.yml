@@ -35,123 +35,51 @@ jobs:
 
       - name: Patch expo-modules-jsi for Swift 6.2 (Xcode 26.3 compatibility)
         run: |
-          python3 - << 'EOF'
-          import re
+          node -e '
+            const fs = require("fs");
+            const base = "node_modules/expo-modules-jsi/apple";
 
-          base = "node_modules/expo-modules-jsi/apple"
+            // 1. Package.swift
+            let pkg = fs.readFileSync(base + "/Package.swift", "utf8");
+            pkg = pkg.replace("swiftLanguageModes: [.v6]", "swiftLanguageModes: [.v5]");
+            pkg = pkg.replace(".enableUpcomingFeature(\"NonisolatedNonsendingByDefault\"),", "");
+            pkg = pkg.replace(".enableUpcomingFeature(\"InferIsolatedConformances\"),", "");
+            pkg = pkg.replace(/\s*\"-Werror\",\s*\"[A-Za-z]+\",/g, "");
+            fs.writeFileSync(base + "/Package.swift", pkg);
 
-          # 1) Package.swift: use Swift 5 language mode, disable upcoming strict isolation features,
-          #    and remove -Werror flags so warnings don't abort compilation.
-          p = base + "/Package.swift"
-          t = open(p).read()
-          t = t.replace("swiftLanguageModes: [.v6]", "swiftLanguageModes: [.v5]")
-          t = t.replace('.enableUpcomingFeature("NonisolatedNonsendingByDefault"),', "")
-          t = t.replace('.enableUpcomingFeature("InferIsolatedConformances"),', "")
-          t = re.sub(r'\s*"-Werror",\s*"[A-Za-z]+",', "", t)
-          open(p, "w").write(t)
-          assert ".v5" in t, "Package.swift patch failed"
+            // 2. JavaScriptObject.swift
+            let obj = fs.readFileSync(base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptObject.swift", "utf8");
+            obj = obj.replace("nonisolated(unsafe) let slot = buffer.baseAddress!", "nonisolated(unsafe) let slot = buffer.baseAddress!\n    let sendableSlot = UncheckedSendable(slot)");
+            obj = obj.replace("try encode(JavaScriptValue.Slot(slot), runtime)", "try encode(JavaScriptValue.Slot(sendableSlot.value), runtime)");
+            fs.writeFileSync(base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptObject.swift", obj);
 
-          # 2) JavaScriptObject.swift: wrap slot pointer in UncheckedSendable
-          p = base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptObject.swift"
-          t = open(p).read()
-          t = t.replace(
-              "nonisolated(unsafe) let slot = buffer.baseAddress!",
-              "nonisolated(unsafe) let slot = buffer.baseAddress!\n    let sendableSlot = UncheckedSendable(slot)",
-          )
-          t = t.replace(
-              "try encode(JavaScriptValue.Slot(slot), runtime)",
-              "try encode(JavaScriptValue.Slot(sendableSlot.value), runtime)",
-          )
-          open(p, "w").write(t)
-          assert "sendableSlot.value" in t, "JavaScriptObject.swift patch failed"
+            // 3. JavaScriptFunction.swift
+            let fn = fs.readFileSync(base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptFunction.swift", "utf8");
+            fn = fn.replace("nonisolated(unsafe) let arguments = storage.baseAddress!", "let arguments = UncheckedSendable(storage.baseAddress!)");
+            fn = fn.replace("nonisolated(unsafe) let result = arguments + argumentCount", "let result = UncheckedSendable(arguments.value + argumentCount)");
+            fn = fn.replace("arguments + index", "arguments.value + index");
+            fn = fn.replace("expo.destroyValues(arguments, argumentCount + 1)", "expo.destroyValues(arguments.value, argumentCount + 1)");
+            fn = fn.replace("start: arguments, count: argumentCount", "start: arguments.value, count: argumentCount");
+            fn = fn.replace("pointee, arguments, argumentCount, result)", "pointee, arguments.value, argumentCount, result.value)");
+            fn = fn.replace("JavaScriptUnownedValue(runtime.pointee, result), runtime)", "JavaScriptUnownedValue(runtime.pointee, result.value), runtime)");
+            fs.writeFileSync(base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptFunction.swift", fn);
 
-          # 3) JavaScriptFunction.swift: wrap arguments and result pointers in UncheckedSendable
-          p = base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptFunction.swift"
-          t = open(p).read()
-          old_fn = """      nonisolated(unsafe) let arguments = storage.baseAddress!
-      nonisolated(unsafe) let result = arguments + argumentCount
-      for index in 0...argumentCount {
-        expo.emplaceUndefined(arguments + index)
-      }
-      defer {
-        expo.destroyValues(arguments, argumentCount + 1)
-      }
-      try JavaScriptActor.assumeIsolated {
-        try emplacing(JavaScriptValuesBuffer(runtime, start: arguments, count: argumentCount), runtime)
-      }
-      try throwCppErrorUnlessSucceeded(
-        expo.callFunctionInto(runtime.pointee, pointee, arguments, argumentCount, result)
-      )
-      try JavaScriptActor.assumeIsolated {
-        try withResult(JavaScriptUnownedValue(runtime.pointee, result), runtime)
-      }"""
-          new_fn = """      let arguments = UncheckedSendable(storage.baseAddress!)
-      let result = UncheckedSendable(arguments.value + argumentCount)
-      for index in 0...argumentCount {
-        expo.emplaceUndefined(arguments.value + index)
-      }
-      defer {
-        expo.destroyValues(arguments.value, argumentCount + 1)
-      }
-      try JavaScriptActor.assumeIsolated {
-        try emplacing(JavaScriptValuesBuffer(runtime, start: arguments.value, count: argumentCount), runtime)
-      }
-      try throwCppErrorUnlessSucceeded(
-        expo.callFunctionInto(runtime.pointee, pointee, arguments.value, argumentCount, result.value)
-      )
-      try JavaScriptActor.assumeIsolated {
-        try withResult(JavaScriptUnownedValue(runtime.pointee, result.value), runtime)
-      }"""
-          assert old_fn in t, "JavaScriptFunction.swift target not found"
-          t = t.replace(old_fn, new_fn)
-          open(p, "w").write(t)
+            // 4. JavaScriptValuesBuffer.swift
+            let buf = fs.readFileSync(base + "/Sources/ExpoModulesJSI/Runtime/JavaScriptValuesBuffer.swift", "utf8");
+            buf = buf.replace("let start = storage.baseAddress", "let start = UncheckedSendable(storage.baseAddress)");
+            buf = buf.replace("if let start {", "if let ptr = start.value {");
+            buf = buf.replace("start + index", "ptr + index");
+            buf = buf.replace("expo.destroyValues(start, count)", "expo.destroyValues(ptr, count)");
+            buf = buf.replace("start: start,", "start: start.value,");
+            fs.writeFileSync(base + "/Sources/ExpoModulesJSI/Runtime/JavaScriptValuesBuffer.swift", buf);
 
-          # 4) JavaScriptValuesBuffer.swift: wrap start pointer in UncheckedSendable
-          p = base + "/Sources/ExpoModulesJSI/Runtime/JavaScriptValuesBuffer.swift"
-          t = open(p).read()
-          old_buf = """      let start = storage.baseAddress
-      if let start {
-        for index in 0..<count {
-          expo.emplaceUndefined(start + index)
-        }
-      }
-      defer {
-        if let start {
-          expo.destroyValues(start, count)
-        }
-      }
-      let buffer = JavaScriptValuesBuffer(runtime, start: start, count: count)
-      try JavaScriptActor.assumeIsolated {
-        try emplaceValues(buffer, runtime)
-      }
-      return try body(buffer)"""
-          new_buf = """      let start = UncheckedSendable(storage.baseAddress)
-      if let ptr = start.value {
-        for index in 0..<count {
-          expo.emplaceUndefined(ptr + index)
-        }
-      }
-      defer {
-        if let ptr = start.value {
-          expo.destroyValues(ptr, count)
-        }
-      }
-      try JavaScriptActor.assumeIsolated {
-        try emplaceValues(JavaScriptValuesBuffer(runtime, start: start.value, count: count), runtime)
-      }
-      return try body(JavaScriptValuesBuffer(runtime, start: start.value, count: count))"""
-          assert old_buf in t, "JavaScriptValuesBuffer.swift target not found"
-          t = t.replace(old_buf, new_buf)
-          open(p, "w").write(t)
+            // 5. build-xcframework.sh (show verbose logs instead of -quiet)
+            let sh = fs.readFileSync(base + "/scripts/build-xcframework.sh", "utf8");
+            sh = sh.replace("    -quiet \\\n", "");
+            fs.writeFileSync(base + "/scripts/build-xcframework.sh", sh);
 
-          # 5) build-xcframework.sh: remove -quiet so any compiler output is visible immediately
-          p = base + "/scripts/build-xcframework.sh"
-          t = open(p).read()
-          t = t.replace("    -quiet \\\n", "")
-          open(p, "w").write(t)
-
-          print("All ExpoModulesJSI patches applied successfully!")
-          EOF
+            console.log("All ExpoModulesJSI patches applied successfully!");
+          '
 
       - name: Generate Native iOS Project (Expo Prebuild)
         env:
@@ -161,21 +89,22 @@ jobs:
       - name: Disable Code Signing in Podfile & Install Pods
         run: |
           cd ios
-          python3 - << 'EOF'
-          p = open("Podfile").read()
-          patch = """
-            installer.pods_project.targets.each do |target|
-              target.build_configurations.each do |config|
-                config.build_settings["CODE_SIGNING_ALLOWED"] = "NO"
-                config.build_settings["CODE_SIGNING_REQUIRED"] = "NO"
-                config.build_settings["CODE_SIGN_IDENTITY"] = ""
-                config.build_settings["EXPANDED_CODE_SIGN_IDENTITY"] = ""
+          node -e '
+            const fs = require("fs");
+            let p = fs.readFileSync("Podfile", "utf8");
+            const patch = `
+              installer.pods_project.targets.each do |target|
+                target.build_configurations.each do |config|
+                  config.build_settings["CODE_SIGNING_ALLOWED"] = "NO"
+                  config.build_settings["CODE_SIGNING_REQUIRED"] = "NO"
+                  config.build_settings["CODE_SIGN_IDENTITY"] = ""
+                  config.build_settings["EXPANDED_CODE_SIGN_IDENTITY"] = ""
+                end
               end
-            end
-          """
-          p = p.replace("post_install do |installer|", "post_install do |installer|\n" + patch)
-          open("Podfile", "w").write(p)
-          EOF
+            `;
+            p = p.replace("post_install do |installer|", "post_install do |installer|\n" + patch);
+            fs.writeFileSync("Podfile", p);
+          '
           pod install
 
       - name: Prebuild ExpoModulesJSI.xcframework (isolated step with clear log)
