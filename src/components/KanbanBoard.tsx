@@ -19,9 +19,8 @@ import type { TaskList } from '../db/taskListRepo';
 import { useKanbanStore, type BoardLayout } from '../stores/useKanbanStore';
 import { useTheme } from '../hooks/useTheme';
 
-const COLUMN_WIDTH = 306;
+const DEFAULT_COLUMN_WIDTH = 320;
 const COLUMN_MARGIN = 14;
-const COLUMN_STRIDE = COLUMN_WIDTH + COLUMN_MARGIN;
 const BOARD_PADDING = 16;
 const DELETE_ZONE_HEIGHT = 115;
 
@@ -29,6 +28,7 @@ interface KanbanBoardProps {
   taskLists: TaskList[];
   tasksByList: Record<string, Task[]>;
   layoutMode: BoardLayout;
+  columnWidth?: number;
   showCompletedByDefault: boolean;
   onAddList: (title: string) => void;
   onRenameList: (id: string, title: string) => void;
@@ -50,6 +50,7 @@ export function KanbanBoard({
   taskLists,
   tasksByList,
   layoutMode,
+  columnWidth = DEFAULT_COLUMN_WIDTH,
   showCompletedByDefault,
   onAddList,
   onRenameList,
@@ -66,16 +67,24 @@ export function KanbanBoard({
   const scrollOffset = useRef({ x: 0, y: 0 });
   const boardTopY = useRef(120);
   const verticalLayouts = useRef<Record<string, { y: number; height: number }>>({});
+  const taskLayouts = useRef<
+    Record<string, Record<string, { y: number; height: number }>>
+  >({});
+  const columnHeaderHeights = useRef<Record<string, number>>({});
+  const columnScrollOffsets = useRef<Record<string, number>>({});
 
   const [draggingTask, setDraggingTask] = useState<Task | null>(null);
   const [draggingColumn, setDraggingColumn] = useState<TaskList | null>(null);
   const [dragPos, setDragPos] = useState({ x: 180, y: 300 });
   const [targetListId, setTargetListId] = useState<string | null>(null);
+  const [targetIndex, setTargetIndex] = useState<number>(0);
   const [isOverDeleteZone, setIsOverDeleteZone] = useState(false);
 
   const lastHoveredTarget = useRef<string | null>(null);
+  const lastTargetIndexRef = useRef<number>(0);
   const wasOverDeleteRef = useRef(false);
   const isVertical = layoutMode === 'vertical';
+  const columnStride = (columnWidth || DEFAULT_COLUMN_WIDTH) + COLUMN_MARGIN;
 
   const handleScroll = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -92,6 +101,61 @@ export function KanbanBoard({
       verticalLayouts.current[listId] = { y, height };
     },
     []
+  );
+
+  const handleLayoutTask = useCallback(
+    (listId: string, taskId: string, y: number, height: number) => {
+      if (!taskLayouts.current[listId]) {
+        taskLayouts.current[listId] = {};
+      }
+      taskLayouts.current[listId][taskId] = { y, height };
+    },
+    []
+  );
+
+  const handleLayoutHeader = useCallback((listId: string, height: number) => {
+    columnHeaderHeights.current[listId] = height;
+  }, []);
+
+  const handleScrollColumn = useCallback((listId: string, scrollY: number) => {
+    columnScrollOffsets.current[listId] = scrollY;
+  }, []);
+
+  const getInsertionIndex = useCallback(
+    (listId: string, pageY: number): number => {
+      const activeTasks = (tasksByList[listId] || []).filter(
+        (t) => t.status === 'needsAction'
+      );
+      if (activeTasks.length === 0) return 0;
+
+      const headerH = (columnHeaderHeights.current[listId] || 64) + 4;
+      let relY = 0;
+
+      if (isVertical) {
+        const colTop = verticalLayouts.current[listId]?.y || 0;
+        relY =
+          pageY -
+          boardTopY.current +
+          scrollOffset.current.y -
+          colTop -
+          headerH;
+      } else {
+        const colScrollY = columnScrollOffsets.current[listId] || 0;
+        relY = pageY - boardTopY.current - 10 - headerH + colScrollY;
+      }
+
+      const layoutsForList = taskLayouts.current[listId] || {};
+      for (let i = 0; i < activeTasks.length; i++) {
+        const t = activeTasks[i];
+        const box = layoutsForList[t.id] || { y: i * 82, height: 72 };
+        const midY = box.y + box.height / 2;
+        if (relY < midY) {
+          return i;
+        }
+      }
+      return activeTasks.length;
+    },
+    [tasksByList, isVertical]
   );
 
   const getColumnAtPoint = useCallback(
@@ -114,11 +178,11 @@ export function KanbanBoard({
       const contentX = pageX + scrollOffset.current.x - BOARD_PADDING;
       const idx = Math.max(
         0,
-        Math.min(taskLists.length - 1, Math.floor(contentX / COLUMN_STRIDE))
+        Math.min(taskLists.length - 1, Math.floor(contentX / columnStride))
       );
       return taskLists[idx] ?? null;
     },
-    [taskLists, isVertical]
+    [taskLists, isVertical, columnStride]
   );
 
   const maybeAutoScroll = useCallback(
@@ -157,16 +221,19 @@ export function KanbanBoard({
     (task: Task, pageX: number, pageY: number) => {
       const safeX = Number.isFinite(pageX) ? pageX : 180;
       const safeY = Number.isFinite(pageY) ? pageY : 300;
+      const initialIdx = getInsertionIndex(task.listId, safeY);
       useKanbanStore.getState().setIsDragging(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
       setDraggingTask(task);
       setDragPos({ x: safeX, y: safeY });
       setTargetListId(task.listId);
+      setTargetIndex(initialIdx);
       lastHoveredTarget.current = task.listId;
+      lastTargetIndexRef.current = initialIdx;
       setIsOverDeleteZone(false);
       wasOverDeleteRef.current = false;
     },
-    []
+    [getInsertionIndex]
   );
 
   const handleColumnStartDrag = useCallback(
@@ -205,10 +272,20 @@ export function KanbanBoard({
 
         if (!overDelete) {
           const col = getColumnAtPoint(pageX, pageY);
-          if (col && col.id !== lastHoveredTarget.current) {
-            lastHoveredTarget.current = col.id;
-            setTargetListId(col.id);
-            Haptics.selectionAsync().catch(() => {});
+          if (col) {
+            const newIdx = getInsertionIndex(col.id, pageY);
+            const listChanged = col.id !== lastHoveredTarget.current;
+            const idxChanged = newIdx !== lastTargetIndexRef.current;
+
+            if (listChanged) {
+              lastHoveredTarget.current = col.id;
+              setTargetListId(col.id);
+            }
+            if (listChanged || idxChanged) {
+              lastTargetIndexRef.current = newIdx;
+              setTargetIndex(newIdx);
+              Haptics.selectionAsync().catch(() => {});
+            }
           }
         } else {
           setTargetListId(null);
@@ -222,7 +299,13 @@ export function KanbanBoard({
         }
       }
     },
-    [draggingTask, draggingColumn, getColumnAtPoint, maybeAutoScroll]
+    [
+      draggingTask,
+      draggingColumn,
+      getColumnAtPoint,
+      getInsertionIndex,
+      maybeAutoScroll,
+    ]
   );
 
   const handleTouchEnd = useCallback(() => {
@@ -232,13 +315,20 @@ export function KanbanBoard({
           Haptics.NotificationFeedbackType.Error
         ).catch(() => {});
         onDeleteTask(draggingTask.id);
-      } else if (targetListId && targetListId !== draggingTask.listId) {
-        onMoveTask(draggingTask.id, draggingTask.listId, targetListId, 0);
+      } else if (targetListId) {
+        onMoveTask(
+          draggingTask.id,
+          draggingTask.listId,
+          targetListId,
+          lastTargetIndexRef.current
+        );
       }
       setDraggingTask(null);
       setTargetListId(null);
+      setTargetIndex(0);
       setIsOverDeleteZone(false);
       lastHoveredTarget.current = null;
+      lastTargetIndexRef.current = 0;
       wasOverDeleteRef.current = false;
     } else if (draggingColumn) {
       if (targetListId && targetListId !== draggingColumn.id) {
@@ -301,6 +391,8 @@ export function KanbanBoard({
       onTouchMove={isAnyDragging ? handleTouchMove : undefined}
       onTouchEnd={isAnyDragging ? handleTouchEnd : undefined}
       onTouchCancel={isAnyDragging ? handleTouchEnd : undefined}
+      onMoveShouldSetResponderCapture={() => isAnyDragging}
+      onStartShouldSetResponderCapture={() => isAnyDragging}
     >
       <ScrollView
         ref={scrollRef}
@@ -312,7 +404,7 @@ export function KanbanBoard({
         showsHorizontalScrollIndicator={false}
         showsVerticalScrollIndicator={false}
         decelerationRate={isVertical ? 'normal' : 'fast'}
-        snapToInterval={isVertical ? undefined : COLUMN_STRIDE}
+        snapToInterval={isVertical ? undefined : columnStride}
         snapToAlignment="start"
         scrollEnabled={!isAnyDragging}
         onScroll={handleScroll}
@@ -322,6 +414,7 @@ export function KanbanBoard({
           <KanbanColumn
             key={list.id}
             list={list}
+            columnWidth={columnWidth}
             tasks={tasksByList[list.id] || []}
             layoutMode={layoutMode}
             showCompletedByDefault={showCompletedByDefault}
@@ -331,11 +424,21 @@ export function KanbanBoard({
               targetListId === list.id &&
               !isOverDeleteZone
             }
+            dropInsertIndex={
+              Boolean(draggingTask) &&
+              targetListId === list.id &&
+              !isOverDeleteZone
+                ? targetIndex
+                : null
+            }
             isColumnDragging={draggingColumn?.id === list.id}
             isColumnDropTarget={
               Boolean(draggingColumn) && targetListId === list.id
             }
             onLayoutColumn={handleLayoutColumn}
+            onLayoutTask={handleLayoutTask}
+            onLayoutHeader={handleLayoutHeader}
+            onScrollColumn={handleScrollColumn}
             onAddTask={onAddTask}
             onToggleTask={onToggleTask}
             onEditTask={onEditTask}
@@ -383,7 +486,13 @@ export function KanbanBoard({
           </Text>
           {targetListId && !isOverDeleteZone ? (
             <Text style={[styles.floatingTarget, { color: theme.accent }]}>
-              → {taskLists.find((l) => l.id === targetListId)?.title}
+              {targetListId === draggingTask.listId
+                ? `↕ Position ${targetIndex + 1} in „${
+                    taskLists.find((l) => l.id === targetListId)?.title
+                  }“`
+                : `→ ${
+                    taskLists.find((l) => l.id === targetListId)?.title
+                  } (Position ${targetIndex + 1})`}
             </Text>
           ) : null}
         </View>
@@ -489,13 +598,13 @@ const styles = StyleSheet.create({
   floatingCard: {
     position: 'absolute',
     width: 260,
-    borderRadius: 18,
-    padding: 15,
+    borderRadius: 20,
+    padding: 16,
     borderWidth: 2,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.3,
-    shadowRadius: 16,
+    shadowOpacity: 0.26,
+    shadowRadius: 20,
     elevation: 12,
     zIndex: 999,
   },

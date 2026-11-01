@@ -36,10 +36,9 @@ interface KanbanState {
   autoSyncDelaySeconds: number;
   searchQuery: string;
   dueFilter: DueFilter;
+  columnWidth: number;
 
-  // Active Focus Timer & Drag state
-  activeFocusTaskId: string | null;
-  focusRemainingSeconds: number;
+  // Drag state
   isDragging: boolean;
 
   // Actions
@@ -83,11 +82,9 @@ interface KanbanState {
   setBoardLayout: (layout: BoardLayout) => Promise<void>;
   setDailyBriefingEnabled: (enabled: boolean) => Promise<void>;
   setShowOverviewHeader: (show: boolean) => Promise<void>;
+  setColumnWidth: (width: number) => Promise<void>;
   setSearchQuery: (q: string) => void;
   setDueFilter: (f: DueFilter) => void;
-  startFocusTimer: (taskId: string, minutes?: number) => void;
-  tickFocusTimer: () => void;
-  stopFocusTimer: () => void;
 }
 
 const DEFAULT_COLUMNS = ['To Do', 'In Progress', 'Done'];
@@ -110,8 +107,7 @@ export const useKanbanStore = create<KanbanState>((set, get) => ({
   autoSyncDelaySeconds: 60,
   searchQuery: '',
   dueFilter: 'all',
-  activeFocusTaskId: null,
-  focusRemainingSeconds: 0,
+  columnWidth: 320,
   isDragging: false,
 
   setIsDragging: (dragging: boolean) => {
@@ -167,6 +163,7 @@ export const useKanbanStore = create<KanbanState>((set, get) => ({
         briefingStr,
         overviewStr,
         syncDelayStr,
+        colWidthStr,
       ] = await Promise.all([
         getSetting('showCompletedByDefault', 'false'),
         getSetting('themeMode', 'system'),
@@ -175,6 +172,7 @@ export const useKanbanStore = create<KanbanState>((set, get) => ({
         getSetting('dailyBriefingEnabled', 'true'),
         getSetting('showOverviewHeader', 'true'),
         getSetting('autoSyncDelaySeconds', '60'),
+        getSetting('columnWidth', '306'),
       ]);
 
       const listsBefore = await taskListRepo.getAllTaskLists();
@@ -196,6 +194,7 @@ export const useKanbanStore = create<KanbanState>((set, get) => ({
 
       const briefingEnabled = briefingStr === 'true';
       const parsedDelay = parseInt(syncDelayStr, 10);
+      const parsedColWidth = Math.min(380, Math.max(220, parseInt(colWidthStr, 10) || 320));
       set({
         taskLists: lists,
         tasksByList,
@@ -206,6 +205,7 @@ export const useKanbanStore = create<KanbanState>((set, get) => ({
         dailyBriefingEnabled: briefingEnabled,
         showOverviewHeader: overviewStr === 'true',
         autoSyncDelaySeconds: Number.isFinite(parsedDelay) ? parsedDelay : 60,
+        columnWidth: parsedColWidth,
         isLoading: false,
       });
 
@@ -504,35 +504,94 @@ export const useKanbanStore = create<KanbanState>((set, get) => ({
     toIndex: number
   ) => {
     try {
+      let didChange = false;
+      let targetOrderedIds: string[] = [];
+      let sourceOrderedIds: string[] = [];
+
       set((state) => {
         const newTasksByList = { ...state.tasksByList };
+
+        if (fromListId === toListId) {
+          const allTasks = [...(newTasksByList[fromListId] || [])];
+          const active = allTasks.filter((t) => t.status === 'needsAction');
+          const completed = allTasks.filter((t) => t.status === 'completed');
+
+          const fromActiveIdx = active.findIndex((t) => t.id === taskId);
+          if (fromActiveIdx === -1) return state;
+
+          const adjustedIdx =
+            fromActiveIdx < toIndex ? Math.max(0, toIndex - 1) : toIndex;
+          const insertIdx = Math.max(
+            0,
+            Math.min(active.length - 1, adjustedIdx)
+          );
+
+          if (fromActiveIdx === insertIdx) {
+            return state;
+          }
+
+          const [movedTask] = active.splice(fromActiveIdx, 1);
+          active.splice(insertIdx, 0, movedTask);
+
+          const reordered = [...active, ...completed].map((t, idx) => ({
+            ...t,
+            localPosition: idx,
+          }));
+
+          newTasksByList[fromListId] = reordered;
+          targetOrderedIds = reordered.map((t) => t.id);
+          didChange = true;
+          return { tasksByList: newTasksByList };
+        }
+
+        // Cross-list move
         const fromTasks = [...(newTasksByList[fromListId] || [])];
         const taskIndex = fromTasks.findIndex((t) => t.id === taskId);
         if (taskIndex === -1) return state;
 
         const [movedTask] = fromTasks.splice(taskIndex, 1);
+        newTasksByList[fromListId] = fromTasks.map((t, idx) => ({
+          ...t,
+          localPosition: idx,
+        }));
+        sourceOrderedIds = newTasksByList[fromListId].map((t) => t.id);
+
         const updatedTask = {
           ...movedTask,
           listId: toListId,
           syncStatus: 'pending' as const,
         };
 
-        if (fromListId === toListId) {
-          fromTasks.splice(toIndex, 0, updatedTask);
-          newTasksByList[fromListId] = fromTasks;
-        } else {
-          newTasksByList[fromListId] = fromTasks;
-          const toTasks = [...(newTasksByList[toListId] || [])];
-          toTasks.splice(toIndex, 0, updatedTask);
-          newTasksByList[toListId] = toTasks;
-        }
+        const toAll = [...(newTasksByList[toListId] || [])];
+        const toActive = toAll.filter((t) => t.status === 'needsAction');
+        const toCompleted = toAll.filter((t) => t.status === 'completed');
+        const insertIdx = Math.max(0, Math.min(toActive.length, toIndex));
+
+        toActive.splice(insertIdx, 0, updatedTask);
+        const reorderedTo = [...toActive, ...toCompleted].map((t, idx) => ({
+          ...t,
+          localPosition: idx,
+        }));
+
+        newTasksByList[toListId] = reorderedTo;
+        targetOrderedIds = reorderedTo.map((t) => t.id);
+        didChange = true;
 
         return { tasksByList: newTasksByList };
       });
 
+      if (!didChange) return;
+
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
-      await taskRepo.moveTask(taskId, toListId, toIndex);
-      get().scheduleSync();
+
+      if (fromListId === toListId) {
+        await taskRepo.reorderTasksInList(toListId, targetOrderedIds);
+      } else {
+        await taskRepo.moveTask(taskId, toListId, toIndex);
+        await taskRepo.reorderTasksInList(fromListId, sourceOrderedIds);
+        await taskRepo.reorderTasksInList(toListId, targetOrderedIds);
+        get().scheduleSync();
+      }
     } catch (error) {
       set({ error: (error as Error).message });
       get().loadAll();
@@ -586,6 +645,13 @@ export const useKanbanStore = create<KanbanState>((set, get) => ({
     await updateDailyBriefingNotification(enabled, openCount);
   },
 
+  setColumnWidth: async (width: number) => {
+    const clamped = Math.min(380, Math.max(220, Math.round(width)));
+    await setSetting('columnWidth', String(clamped));
+    set({ columnWidth: clamped });
+    Haptics.selectionAsync().catch(() => {});
+  },
+
   setShowOverviewHeader: async (show: boolean) => {
     await setSetting('showOverviewHeader', show ? 'true' : 'false');
     set({ showOverviewHeader: show });
@@ -593,29 +659,4 @@ export const useKanbanStore = create<KanbanState>((set, get) => ({
 
   setSearchQuery: (q: string) => set({ searchQuery: q }),
   setDueFilter: (f: DueFilter) => set({ dueFilter: f }),
-
-  startFocusTimer: (taskId: string, minutes: number = 25) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
-    set({
-      activeFocusTaskId: taskId,
-      focusRemainingSeconds: minutes * 60,
-    });
-  },
-
-  tickFocusTimer: () => {
-    const { focusRemainingSeconds, activeFocusTaskId } = get();
-    if (!activeFocusTaskId) return;
-    if (focusRemainingSeconds <= 1) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
-        () => {}
-      );
-      set({ activeFocusTaskId: null, focusRemainingSeconds: 0 });
-    } else {
-      set({ focusRemainingSeconds: focusRemainingSeconds - 1 });
-    }
-  },
-
-  stopFocusTimer: () => {
-    set({ activeFocusTaskId: null, focusRemainingSeconds: 0 });
-  },
 }));

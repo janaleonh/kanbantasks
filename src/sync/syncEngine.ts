@@ -20,6 +20,8 @@ import {
   type GTask,
 } from './googleTasksApi';
 import { generateUUID } from '../utils/uuid';
+import { loadCachedUser } from '../auth/googleAuth';
+import { requireTaskAccount } from '../auth/taskAccount';
 
 export type SyncStatus = 'idle' | 'syncing' | 'error';
 
@@ -37,6 +39,7 @@ export async function runSync(): Promise<SyncResult> {
   const recentlyRemovedRemoteIds = new Set<string>();
 
   try {
+    await requireTaskAccount((await loadCachedUser())?.email);
     // ── Step 0: Self-heal any local duplicates / clones ───
     await cleanupLocalDuplicates();
 
@@ -96,49 +99,8 @@ async function cleanupLocalDuplicates(): Promise<void> {
     }
   }
 
-  // 3. Clean up multiplied identical tasks in the same list (same listId, title, notes, status)
-  const cloneGroups = await db.getAllAsync<{
-    listId: string;
-    title: string;
-    notes: string;
-    status: string;
-    cnt: number;
-  }>(
-    `SELECT listId, title, notes, status, COUNT(*) as cnt
-     FROM tasks
-     WHERE deletedLocally = 0
-     GROUP BY listId, title, notes, status
-     HAVING COUNT(*) > 1`
-  );
-
-  const now = new Date().toISOString();
-  for (const grp of cloneGroups) {
-    // Prefer keeping the row that is already cleanly synced in this list (previousListId IS NULL and remoteId IS NOT NULL)
-    const rows = await db.getAllAsync<{
-      id: string;
-      remoteId: string | null;
-      previousListId: string | null;
-    }>(
-      `SELECT id, remoteId, previousListId
-       FROM tasks
-       WHERE listId = ? AND title = ? AND notes = ? AND status = ? AND deletedLocally = 0
-       ORDER BY (previousListId IS NULL AND remoteId IS NOT NULL) DESC, updatedAt ASC`,
-      [grp.listId, grp.title, grp.notes, grp.status]
-    );
-
-    // Keep rows[0], mark all extra clones for deletion (both locally and remotely)
-    for (let i = 1; i < rows.length; i++) {
-      const clone = rows[i];
-      if (clone.remoteId) {
-        await db.runAsync(
-          "UPDATE tasks SET deletedLocally = 1, updatedAt = ?, syncStatus = 'pending' WHERE id = ?",
-          [now, clone.id]
-        );
-      } else {
-        await db.runAsync('DELETE FROM tasks WHERE id = ?', [clone.id]);
-      }
-    }
-  }
+  // Matching titles/notes are not proof of duplication: distinct tasks may have
+  // different due dates, reminders or simply be intentionally identical.
 }
 
 // ──────────────────────────────────────────────────────────

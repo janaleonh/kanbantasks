@@ -1,4 +1,5 @@
-import { getValidAccessToken } from '../auth/googleAuth';
+import { getValidAccessToken, loadCachedUser, getAuthVersion } from '../auth/googleAuth';
+import { requireTaskAccount } from '../auth/taskAccount';
 
 const BASE_URL = 'https://tasks.googleapis.com/tasks/v1';
 
@@ -39,10 +40,13 @@ async function request<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
+  const version = getAuthVersion();
+  await requireTaskAccount((await loadCachedUser())?.email);
   const token = await getValidAccessToken();
   if (!token) throw new Error('NOT_AUTHENTICATED');
+  if (version !== getAuthVersion()) throw new Error('AUTH_CHANGED');
 
-  const url = path.startsWith('http') ? path : `${BASE_URL}${path}`;
+  const url = `${BASE_URL}${path}`;
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
     ...((options.headers as Record<string, string>) || {}),
@@ -55,18 +59,19 @@ async function request<T>(
     ...options,
     headers,
   });
+  if (version !== getAuthVersion()) throw new Error('AUTH_CHANGED');
 
   if (res.status === 401) throw new Error('TOKEN_EXPIRED');
   if (res.status === 404) throw new Error('NOT_FOUND');
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`API_ERROR ${res.status}: ${body}`);
+    throw new Error(`API_ERROR ${res.status}`);
   }
 
   // Handle 204 No Content or empty body (e.g. DELETE in Google Tasks API)
   if (res.status === 204) return undefined as unknown as T;
 
   const text = await res.text();
+  if (version !== getAuthVersion()) throw new Error('AUTH_CHANGED');
   if (!text || !text.trim()) {
     return undefined as unknown as T;
   }
@@ -84,7 +89,7 @@ async function paginate<T>(
   const url = firstUrl;
 
   do {
-    const fullUrl = pageToken ? `${url}&pageToken=${pageToken}` : url;
+    const fullUrl = pageToken ? `${url}&pageToken=${encodeURIComponent(pageToken)}` : url;
     const data: any = await request<any>(fullUrl);
     if (data && data[itemsKey]) results.push(...data[itemsKey]);
     pageToken = data?.nextPageToken;
@@ -115,7 +120,7 @@ export async function updateRemoteTaskList(
   remoteId: string,
   title: string
 ): Promise<GTaskList> {
-  return request<GTaskList>(`/users/@me/lists/${remoteId}`, {
+  return request<GTaskList>(`/users/@me/lists/${encodeURIComponent(remoteId)}`, {
     method: 'PATCH',
     body: JSON.stringify({ title: title || 'Liste' }),
   });
@@ -123,7 +128,7 @@ export async function updateRemoteTaskList(
 
 export async function deleteRemoteTaskList(remoteId: string): Promise<void> {
   try {
-    await request<void>(`/users/@me/lists/${remoteId}`, { method: 'DELETE' });
+    await request<void>(`/users/@me/lists/${encodeURIComponent(remoteId)}`, { method: 'DELETE' });
   } catch (err) {
     const msg = (err as Error).message || '';
     if (
@@ -144,7 +149,7 @@ export async function deleteRemoteTaskList(remoteId: string): Promise<void> {
 
 export async function fetchAllTasks(remoteListId: string): Promise<GTask[]> {
   const items = await paginate<GTask>(
-    `/lists/${remoteListId}/tasks?maxResults=100&showCompleted=true&showHidden=true`,
+    `/lists/${encodeURIComponent(remoteListId)}/tasks?maxResults=100&showCompleted=true&showHidden=true`,
     'items'
   );
   // Filter out soft-deleted tasks returned by Google Tasks API
@@ -171,7 +176,7 @@ export async function createRemoteTask(
     payload.completed = new Date().toISOString();
   }
 
-  return request<GTask>(`/lists/${remoteListId}/tasks`, {
+  return request<GTask>(`/lists/${encodeURIComponent(remoteListId)}/tasks`, {
     method: 'POST',
     body: JSON.stringify(payload),
   });
@@ -199,7 +204,7 @@ export async function updateRemoteTask(
     payload.due = updates.due ? normalizeDueDate(updates.due) ?? null : null;
   }
 
-  return request<GTask>(`/lists/${remoteListId}/tasks/${remoteTaskId}`, {
+  return request<GTask>(`/lists/${encodeURIComponent(remoteListId)}/tasks/${encodeURIComponent(remoteTaskId)}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
   });
@@ -210,7 +215,7 @@ export async function deleteRemoteTask(
   remoteTaskId: string
 ): Promise<void> {
   try {
-    await request<void>(`/lists/${remoteListId}/tasks/${remoteTaskId}`, {
+    await request<void>(`/lists/${encodeURIComponent(remoteListId)}/tasks/${encodeURIComponent(remoteTaskId)}`, {
       method: 'DELETE',
     });
   } catch (err) {

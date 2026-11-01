@@ -1,7 +1,8 @@
 import { useColorScheme } from 'react-native';
 import { useKanbanStore } from '../stores/useKanbanStore';
+import { getNewDesign } from '../designs/presets';
 
-export type DesignPreset = 'apple' | 'things' | 'linear' | 'oled';
+export type DesignPreset = 'apple' | 'things' | 'linear' | 'oled' | 'studio' | 'paper' | 'midnight';
 
 export interface ThemeColors {
   isDark: boolean;
@@ -21,12 +22,18 @@ export interface ThemeColors {
   border: string;
   inputBg: string;
   accent: string;
+  onAccent?: string;
   pillBg: string;
   cardRadius: number;
   columnRadius: number;
   showCardBorder: boolean;
   useCircularCheckbox: boolean;
   tintColumns: boolean;
+  cardPadding?: number;
+  cardGap?: number;
+  headingFont?: string;
+  titleSize?: number;
+  cardShadowOpacity?: number;
 }
 
 export function useTheme(): ThemeColors {
@@ -38,6 +45,9 @@ export function useTheme(): ThemeColors {
     designPreset === 'oled' ||
     themeMode === 'dark' ||
     (themeMode === 'system' && systemScheme === 'dark');
+
+  const newDesign = getNewDesign(designPreset, isDark);
+  if (newDesign) return newDesign;
 
   // 1. OLED Pure Black (iPhone Pro Display Look)
   if (designPreset === 'oled') {
@@ -180,29 +190,29 @@ export function useTheme(): ThemeColors {
     };
   }
 
-  // 4. Default ('apple'): iOS 27 Liquid Glass (Translucent Frosted Glass + Specular Refraction)
+  // 4. Default ('apple'): Native iOS Glass (Refined for iPhone 15 Pro Max Super Retina XDR)
   if (isDark) {
     return {
       isDark: true,
       isGlass: true,
       preset: 'apple',
-      background: '#050816',
-      surface: 'rgba(20, 26, 48, 0.62)',
-      columnBg: 'rgba(18, 25, 46, 0.45)',
-      cardBg: 'rgba(255, 255, 255, 0.09)',
-      cardBorder: 'rgba(255, 255, 255, 0.22)',
-      glassBorderBright: 'rgba(255, 255, 255, 0.38)',
-      glassBorderDim: 'rgba(255, 255, 255, 0.08)',
-      glassSheenStart: 'rgba(255, 255, 255, 0.18)',
-      glassSheenEnd: 'rgba(255, 255, 255, 0.02)',
-      text: '#FFFFFF',
-      subtext: 'rgba(226, 232, 240, 0.72)',
-      border: 'rgba(255, 255, 255, 0.16)',
-      inputBg: 'rgba(15, 23, 42, 0.65)',
-      accent: '#38BDF8',
-      pillBg: 'rgba(255, 255, 255, 0.12)',
-      cardRadius: 20,
-      columnRadius: 28,
+      background: '#000000',
+      surface: 'rgba(18, 22, 34, 0.75)',
+      columnBg: 'rgba(20, 26, 42, 0.48)',
+      cardBg: 'rgba(255, 255, 255, 0.06)',
+      cardBorder: 'rgba(255, 255, 255, 0.10)',
+      glassBorderBright: 'rgba(255, 255, 255, 0.16)',
+      glassBorderDim: 'rgba(255, 255, 255, 0.05)',
+      glassSheenStart: 'rgba(255, 255, 255, 0.09)',
+      glassSheenEnd: 'rgba(255, 255, 255, 0.0)',
+      text: '#F8FAFC',
+      subtext: '#94A3B8',
+      border: 'rgba(255, 255, 255, 0.10)',
+      inputBg: 'rgba(20, 26, 42, 0.70)',
+      accent: '#0A84FF',
+      pillBg: 'rgba(255, 255, 255, 0.08)',
+      cardRadius: 16,
+      columnRadius: 22,
       showCardBorder: true,
       useCircularCheckbox: true,
       tintColumns: true,
@@ -213,23 +223,23 @@ export function useTheme(): ThemeColors {
     isDark: false,
     isGlass: true,
     preset: 'apple',
-    background: '#DCE8FF',
-    surface: 'rgba(255, 255, 255, 0.62)',
-    columnBg: 'rgba(255, 255, 255, 0.42)',
-    cardBg: 'rgba(255, 255, 255, 0.62)',
-    cardBorder: 'rgba(255, 255, 255, 0.85)',
-    glassBorderBright: 'rgba(255, 255, 255, 0.92)',
-    glassBorderDim: 'rgba(255, 255, 255, 0.38)',
-    glassSheenStart: 'rgba(255, 255, 255, 0.68)',
-    glassSheenEnd: 'rgba(255, 255, 255, 0.18)',
-    text: '#0B132B',
-    subtext: 'rgba(15, 23, 42, 0.62)',
-    border: 'rgba(255, 255, 255, 0.65)',
-    inputBg: 'rgba(255, 255, 255, 0.75)',
-    accent: '#0066FF',
-    pillBg: 'rgba(255, 255, 255, 0.52)',
-    cardRadius: 20,
-    columnRadius: 28,
+    background: '#F2F2F7',
+    surface: 'rgba(255, 255, 255, 0.85)',
+    columnBg: 'rgba(255, 255, 255, 0.60)',
+    cardBg: 'rgba(255, 255, 255, 0.88)',
+    cardBorder: 'rgba(0, 0, 0, 0.06)',
+    glassBorderBright: 'rgba(255, 255, 255, 0.90)',
+    glassBorderDim: 'rgba(0, 0, 0, 0.05)',
+    glassSheenStart: 'rgba(255, 255, 255, 0.40)',
+    glassSheenEnd: 'rgba(255, 255, 255, 0.0)',
+    text: '#000000',
+    subtext: '#6E6E73',
+    border: 'rgba(0, 0, 0, 0.08)',
+    inputBg: '#FFFFFF',
+    accent: '#007AFF',
+    pillBg: 'rgba(0, 0, 0, 0.05)',
+    cardRadius: 16,
+    columnRadius: 22,
     showCardBorder: true,
     useCircularCheckbox: true,
     tintColumns: true,

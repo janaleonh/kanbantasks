@@ -9,14 +9,15 @@ import {
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
+import * as Haptics from 'expo-haptics';
 import { KanbanBoard } from '../src/components/KanbanBoard';
 import { EditTaskModal } from '../src/components/EditTaskModal';
 import { SyncStatusBadge } from '../src/components/SyncStatusBadge';
 import { LiquidGlassBackground } from '../src/components/LiquidGlassBackground';
-import { useKanbanStore, type DueFilter } from '../src/stores/useKanbanStore';
+import { useKanbanStore } from '../src/stores/useKanbanStore';
 import { useSyncOnReconnect } from '../src/hooks/useSyncOnReconnect';
 import { useTheme } from '../src/hooks/useTheme';
 import { loadCachedUser, type GoogleUser } from '../src/auth/googleAuth';
@@ -24,6 +25,7 @@ import type { Task } from '../src/db/taskRepo';
 
 export default function HomeScreen() {
   const router = useRouter();
+  const { widget } = useLocalSearchParams<{ widget?: string }>();
   const theme = useTheme();
   const {
     taskLists,
@@ -32,11 +34,9 @@ export default function HomeScreen() {
     syncState,
     error,
     showCompletedByDefault,
-    showOverviewHeader,
     boardLayout,
+    columnWidth,
     searchQuery,
-    dueFilter,
-    activeFocusTaskId,
     loadAll,
     syncWithGoogle,
     addTaskList,
@@ -49,17 +49,54 @@ export default function HomeScreen() {
     removeTask,
     toggleTask,
     setBoardLayout,
+    setColumnWidth,
     setSearchQuery,
     setDueFilter,
-    tickFocusTimer,
   } = useKanbanStore();
 
   const { isConnected } = useSyncOnReconnect(syncWithGoogle);
+
+  useEffect(() => {
+    // Older Today links also open the single, unfiltered board.
+    setDueFilter('all');
+    if (widget === 'today' || widget === 'overview') {
+      setSearchQuery('');
+    }
+  }, [widget, setSearchQuery, setDueFilter]);
 
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [showSearchBar, setShowSearchBar] = useState(false);
   const [user, setUser] = useState<GoogleUser | null>(null);
+  const [widthToast, setWidthToast] = useState<string | null>(null);
+  const toastTimeoutRef = React.useRef<any>(null);
+
+  const handleCycleColumnWidth = useCallback(() => {
+    // Cycles between 260 (Kompakt), 320 (Standard), 380 (Breit)
+    let nextWidth = 320;
+    let label = 'Standard (320px)';
+    if (columnWidth <= 280) {
+      nextWidth = 320;
+      label = 'Standard (320px)';
+    } else if (columnWidth <= 340) {
+      nextWidth = 380;
+      label = 'Breit (380px)';
+    } else {
+      nextWidth = 260;
+      label = 'Kompakt (260px)';
+    }
+
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    setColumnWidth(nextWidth);
+    setWidthToast(label);
+
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
+    toastTimeoutRef.current = setTimeout(() => {
+      setWidthToast(null);
+    }, 1400);
+  }, [columnWidth, setColumnWidth]);
 
   useEffect(() => {
     loadCachedUser().then(setUser).catch(console.error);
@@ -68,15 +105,6 @@ export default function HomeScreen() {
     });
   }, [loadAll, syncWithGoogle]);
 
-  // Focus timer 1s interval
-  useEffect(() => {
-    if (!activeFocusTaskId) return;
-    const interval = setInterval(() => {
-      tickFocusTimer();
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [activeFocusTaskId, tickFocusTimer]);
-
   const visibleLists = useMemo(
     () => taskLists.filter((l) => l.isVisible),
     [taskLists]
@@ -84,17 +112,6 @@ export default function HomeScreen() {
 
   const filteredTasksByList = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    const now = new Date();
-    const endOfToday = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate(),
-      23,
-      59,
-      59,
-      999
-    ).getTime();
-
     const result: Record<string, Task[]> = {};
     for (const listId of Object.keys(tasksByList)) {
       result[listId] = (tasksByList[listId] || []).filter((t) => {
@@ -103,20 +120,11 @@ export default function HomeScreen() {
           const matchNotes = (t.notes || '').toLowerCase().includes(q);
           if (!matchTitle && !matchNotes) return false;
         }
-        if (dueFilter === 'today') {
-          if (!t.due || t.status === 'completed') return false;
-          const dueTime = new Date(t.due).getTime();
-          return dueTime <= endOfToday;
-        }
-        if (dueFilter === 'overdue') {
-          if (!t.due || t.status === 'completed') return false;
-          return new Date(t.due).setHours(23, 59, 59, 999) < Date.now();
-        }
         return true;
       });
     }
     return result;
-  }, [tasksByList, searchQuery, dueFilter]);
+  }, [tasksByList, searchQuery]);
 
   const stats = useMemo(() => {
     let pending = taskLists.filter((l) => l.syncStatus === 'pending').length;
@@ -228,35 +236,32 @@ export default function HomeScreen() {
       {/* iOS 27 Liquid Glass Ambient Refraction Backdrop */}
       <LiquidGlassBackground />
 
-      {/* Native Apple iOS Large Title Header */}
+      {/* Board actions and connection issues */}
       <View style={styles.header}>
-        <View style={styles.headerTopRow}>
-          <View style={styles.titleRow}>
-            <Text style={[styles.headerTitle, { color: theme.text }]}>
-              Aufgaben
-            </Text>
-            <SyncStatusBadge
-              isConnected={isConnected}
-              syncState={syncState}
-              pendingCount={stats.pendingCount}
-            />
-          </View>
-
+        <View style={styles.headerNavBar}>
+          <Text
+            accessibilityRole="header"
+            numberOfLines={1}
+            style={[styles.plannerTitle, { color: theme.text, fontFamily: theme.headingFont }]}
+          >
+            Planner
+          </Text>
           <View
             style={[
               styles.actionCluster,
               {
-                backgroundColor: theme.isGlass ? 'transparent' : theme.pillBg,
-                borderTopColor: theme.glassBorderBright,
-                borderLeftColor: theme.glassBorderBright,
-                borderRightColor: theme.glassBorderDim,
-                borderBottomColor: theme.glassBorderDim,
+                backgroundColor: theme.isGlass
+                  ? theme.isDark
+                    ? 'rgba(255, 255, 255, 0.08)'
+                    : 'rgba(255, 255, 255, 0.65)'
+                  : theme.pillBg,
+                borderColor: theme.glassBorderBright,
               },
             ]}
           >
             {theme.isGlass && (
               <BlurView
-                intensity={theme.isDark ? 45 : 65}
+                intensity={theme.isDark ? 50 : 70}
                 tint={theme.isDark ? 'dark' : 'light'}
                 style={StyleSheet.absoluteFill}
               />
@@ -264,7 +269,7 @@ export default function HomeScreen() {
             <TouchableOpacity
               onPress={toggleLayout}
               style={styles.iconPillBtn}
-              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
             >
               <Ionicons
                 name={
@@ -272,19 +277,33 @@ export default function HomeScreen() {
                     ? 'reorder-four-outline'
                     : 'albums-outline'
                 }
-                size={20}
+                size={19}
                 color={theme.accent}
               />
             </TouchableOpacity>
 
+            {boardLayout === 'horizontal' && (
+              <TouchableOpacity
+                onPress={handleCycleColumnWidth}
+                style={styles.iconPillBtn}
+                hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+              >
+                <Ionicons
+                  name="resize-outline"
+                  size={18}
+                  color={theme.accent}
+                />
+              </TouchableOpacity>
+            )}
+
             <TouchableOpacity
               onPress={() => setShowSearchBar((prev) => !prev)}
               style={styles.iconPillBtn}
-              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
             >
               <Ionicons
                 name="search-outline"
-                size={20}
+                size={19}
                 color={
                   showSearchBar || searchQuery ? theme.accent : theme.text
                 }
@@ -295,11 +314,11 @@ export default function HomeScreen() {
               onPress={syncWithGoogle}
               disabled={syncState === 'syncing'}
               style={styles.iconPillBtn}
-              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
             >
               <Ionicons
                 name="sync-outline"
-                size={20}
+                size={19}
                 color={syncState === 'syncing' ? theme.subtext : theme.text}
               />
             </TouchableOpacity>
@@ -307,16 +326,33 @@ export default function HomeScreen() {
             <TouchableOpacity
               onPress={() => router.push('/settings')}
               style={styles.iconPillBtn}
-              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
             >
               <Ionicons
                 name="ellipsis-horizontal-circle-outline"
-                size={22}
+                size={21}
                 color={theme.text}
               />
             </TouchableOpacity>
           </View>
         </View>
+
+        <SyncStatusBadge
+          isConnected={isConnected}
+          syncState={syncState}
+          pendingCount={stats.pendingCount}
+          errorMessage={error}
+          onRetry={() => { void syncWithGoogle(); }}
+        />
+      </View>
+
+      <View style={[styles.viewPicker, { backgroundColor: theme.pillBg }]}>
+        {(['Board', 'Kalender', 'Dokumente'] as const).map((label) => {
+          const active = label === 'Board';
+          return <TouchableOpacity key={label} accessibilityRole="button" accessibilityState={{ selected: active }} onPress={() => label === 'Kalender' ? router.push('/calendar') : label === 'Dokumente' ? router.push('/documents') : setDueFilter('all')} style={[styles.viewOption, { backgroundColor: active ? theme.surface : 'transparent' }]}>
+            <Text style={{ color: active ? theme.text : theme.subtext, fontWeight: '600', fontSize: 14 }}>{label}</Text>
+          </TouchableOpacity>;
+        })}
       </View>
 
       {/* Search Bar */}
@@ -369,12 +405,12 @@ export default function HomeScreen() {
             style={[styles.connectButton, { backgroundColor: theme.accent }]}
             onPress={() => router.push('/settings')}
           >
-            <Text style={styles.connectButtonText}>Einstellungen öffnen</Text>
+            <Text style={[styles.connectButtonText, { color: theme.onAccent ?? '#FFFFFF' }]}>Einstellungen öffnen</Text>
           </TouchableOpacity>
         </View>
       ) : null}
 
-      {error ? (
+      {error && syncState !== 'error' ? (
         <View style={styles.errorBanner}>
           <Ionicons name="warning-outline" size={16} color="#FF3B30" />
           <Text style={styles.errorText}>{error}</Text>
@@ -386,6 +422,7 @@ export default function HomeScreen() {
         taskLists={visibleLists}
         tasksByList={filteredTasksByList}
         layoutMode={boardLayout}
+        columnWidth={columnWidth}
         showCompletedByDefault={showCompletedByDefault}
         onAddList={addTaskList}
         onRenameList={renameTaskList}
@@ -398,6 +435,28 @@ export default function HomeScreen() {
         onEditTask={handleEditTask}
       />
 
+      {/* Column Width Quick Toggle Toast Pill */}
+      {widthToast && (
+        <View style={styles.toastContainer} pointerEvents="none">
+          <View
+            style={[
+              styles.toastPill,
+              {
+                backgroundColor: theme.isDark
+                  ? 'rgba(30, 41, 59, 0.92)'
+                  : 'rgba(255, 255, 255, 0.94)',
+                borderColor: theme.glassBorderBright,
+              },
+            ]}
+          >
+            <Ionicons name="resize-outline" size={15} color={theme.accent} />
+            <Text style={[styles.toastText, { color: theme.text }]}>
+              Spaltenbreite: {widthToast}
+            </Text>
+          </View>
+        </View>
+      )}
+
       {/* Apple-style Quick Capture Floating Button */}
       {visibleLists.length > 0 && (
         <TouchableOpacity
@@ -405,7 +464,7 @@ export default function HomeScreen() {
           onPress={handleQuickAddTask}
           style={[styles.fab, { backgroundColor: theme.accent }]}
         >
-          <Ionicons name="add" size={28} color="#FFFFFF" />
+          <Ionicons name="add" size={28} color={theme.onAccent ?? '#FFFFFF'} />
         </TouchableOpacity>
       )}
 
@@ -424,6 +483,8 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
+  viewPicker: { flexDirection: 'row', borderRadius: 12, marginHorizontal: 16, marginTop: 8, marginBottom: 12, padding: 4 },
+  viewOption: { flex: 1, paddingVertical: 10, borderRadius: 9, alignItems: 'center' },
   container: {
     flex: 1,
   },
@@ -439,38 +500,37 @@ const styles = StyleSheet.create({
   },
   header: {
     paddingHorizontal: 16,
-    paddingTop: 6,
-    paddingBottom: 8,
+    paddingTop: 8,
+    paddingBottom: 6,
   },
-  headerTopRow: {
+  headerNavBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 12,
   },
-  titleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  headerTitle: {
-    fontSize: 32,
-    fontWeight: '800',
+  plannerTitle: {
+    flex: 1,
+    fontSize: 25,
+    fontWeight: '700',
     letterSpacing: -0.6,
   },
   actionCluster: {
     flexDirection: 'row',
     alignItems: 'center',
     borderRadius: 999,
-    paddingHorizontal: 6,
-    paddingVertical: 4,
-    gap: 2,
-    borderWidth: 1,
+    paddingHorizontal: 4,
+    paddingVertical: 3,
+    gap: 1,
+    borderWidth: StyleSheet.hairlineWidth * 1.5,
     overflow: 'hidden',
   },
   iconPillBtn: {
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    borderRadius: 12,
+    width: 34,
+    height: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 17,
   },
   summaryGrid: {
     flexDirection: 'row',
@@ -582,5 +642,32 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 8,
     elevation: 6,
+  },
+  toastContainer: {
+    position: 'absolute',
+    top: 60,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 999,
+  },
+  toastPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderRadius: 20,
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  toastText: {
+    fontSize: 13,
+    fontWeight: '600',
+    letterSpacing: -0.2,
   },
 });

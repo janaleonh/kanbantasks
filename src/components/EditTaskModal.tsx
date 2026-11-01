@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,7 +9,12 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Pressable,
+  useWindowDimensions,
+  Alert,
 } from 'react-native';
+import { initialWindowMetrics } from 'react-native-safe-area-context';
+import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import type { Task, TaskPriority } from '../db/taskRepo';
 import type { TaskList } from '../db/taskListRepo';
@@ -54,15 +59,20 @@ export function EditTaskModal({
   const theme = useTheme();
   const [title, setTitle] = useState('');
   const [notes, setNotes] = useState('');
+  const [status, setStatus] = useState<'needsAction' | 'completed'>('needsAction');
   const [due, setDue] = useState<string | null>(null);
   const [priority, setPriority] = useState<TaskPriority>('none');
   const [reminderAt, setReminderAt] = useState<string | null>(null);
   const [selectedListId, setSelectedListId] = useState<string>('');
+  const insets = initialWindowMetrics?.insets ?? { bottom: 24, top: 0, left: 0, right: 0 };
+  const { height: screenHeight } = useWindowDimensions();
+  const formRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
 
   useEffect(() => {
     if (task) {
       setTitle(task.title);
       setNotes(task.notes || '');
+      setStatus(task.status);
       setDue(task.due ?? null);
       setPriority(task.priority || 'none');
       setReminderAt(task.reminderAt ?? null);
@@ -108,6 +118,7 @@ export function EditTaskModal({
       onSave(task.id, {
         title: title.trim(),
         notes: notes.trim(),
+        status,
         due,
         priority,
         reminderAt,
@@ -120,48 +131,116 @@ export function EditTaskModal({
   };
 
   const handleDelete = () => {
-    onDelete(task.id);
-    onClose();
+    Alert.alert('Aufgabe löschen?', `„${task.title}“ wird gelöscht.`, [
+      { text: 'Abbrechen', style: 'cancel' },
+      { text: 'Löschen', style: 'destructive', onPress: () => {
+        onDelete(task.id);
+        onClose();
+      } },
+    ]);
   };
+
+  const maxSheetHeight = Math.min(screenHeight * 0.84, 750);
 
   return (
     <Modal
       visible={visible}
       animationType="slide"
-      presentationStyle="pageSheet"
+      transparent={true}
       onRequestClose={onClose}
     >
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={[styles.container, { backgroundColor: theme.background }]}
+        style={styles.keyboardContainer}
       >
-        {/* Apple iOS Sheet Header */}
-        <View
-          style={[
-            styles.header,
-            { backgroundColor: theme.surface, borderBottomColor: theme.border },
-          ]}
-        >
-          <TouchableOpacity onPress={onClose}>
-            <Text style={[styles.cancelText, { color: theme.accent }]}>
-              Abbrechen
-            </Text>
-          </TouchableOpacity>
-          <Text style={[styles.headerTitle, { color: theme.text }]}>
-            Details
-          </Text>
-          <TouchableOpacity onPress={handleSave}>
-            <Text style={[styles.saveText, { color: theme.accent }]}>
-              Fertig
-            </Text>
-          </TouchableOpacity>
-        </View>
+      <View style={[styles.modalOverlay, { paddingTop: insets.top + 8 }]}>
+        {/* Upper dim backdrop - tap anywhere above to close */}
+        <Pressable style={styles.backdrop} onPress={onClose} />
 
-        <ScrollView style={styles.form} keyboardShouldPersistTaps="handled">
-          {/* Grouped iOS Card: Title & Notes */}
           <View
-            style={[styles.iosGroup, { backgroundColor: theme.cardBg }]}
+            style={[
+              styles.sheetContainer,
+              {
+                height: maxSheetHeight,
+                backgroundColor: theme.isGlass
+                  ? theme.isDark
+                    ? 'rgba(16, 20, 32, 0.95)'
+                    : 'rgba(255, 255, 255, 0.96)'
+                  : theme.surface,
+                borderTopColor: theme.glassBorderBright,
+                borderLeftColor: theme.glassBorderBright,
+                borderRightColor: theme.glassBorderDim,
+              },
+            ]}
           >
+            {theme.isGlass && (
+              <BlurView
+                intensity={theme.isDark ? 65 : 85}
+                tint={theme.isDark ? 'dark' : 'light'}
+                style={StyleSheet.absoluteFill}
+              />
+            )}
+
+            {/* Apple Grabber Bar */}
+            <View style={styles.grabberRow}>
+              <View
+                style={[
+                  styles.grabberPill,
+                  {
+                    backgroundColor: theme.isDark
+                      ? 'rgba(255, 255, 255, 0.28)'
+                      : 'rgba(0, 0, 0, 0.20)',
+                  },
+                ]}
+              />
+            </View>
+
+            {/* Ergonomic Header with Close Icon */}
+            <View
+              style={[
+                styles.header,
+                { borderBottomColor: theme.glassBorderDim },
+              ]}
+            >
+              <Text style={[styles.headerTitle, { color: theme.text }]}>
+                Aufgabe bearbeiten
+              </Text>
+              <TouchableOpacity
+                onPress={handleDelete}
+                accessibilityRole="button"
+                accessibilityLabel="Aufgabe löschen"
+                style={styles.headerDeleteButton}
+              >
+                <Ionicons name="trash-outline" size={20} color="#FF3B30" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={onClose}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                style={[
+                  styles.closeCircleBtn,
+                  {
+                    backgroundColor: theme.isDark
+                      ? 'rgba(255, 255, 255, 0.10)'
+                      : 'rgba(0, 0, 0, 0.06)',
+                  },
+                ]}
+              >
+                <Ionicons name="close" size={18} color={theme.text} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              ref={formRef}
+              style={styles.form}
+              contentContainerStyle={styles.formContent}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+              showsVerticalScrollIndicator={false}
+            >
+              {/* Grouped iOS Card: Title & Notes */}
+              <View
+                style={[styles.iosGroup, { backgroundColor: theme.cardBg }]}
+              >
             <TextInput
               style={[
                 styles.titleInput,
@@ -169,6 +248,7 @@ export function EditTaskModal({
               ]}
               value={title}
               onChangeText={setTitle}
+              onFocus={() => formRef.current?.scrollTo({ y: 0, animated: true })}
               placeholder="Titel"
               placeholderTextColor={theme.subtext}
             />
@@ -179,6 +259,7 @@ export function EditTaskModal({
               placeholder="Notizen"
               placeholderTextColor={theme.subtext}
               multiline
+              scrollEnabled
               numberOfLines={3}
               textAlignVertical="top"
             />
@@ -210,7 +291,7 @@ export function EditTaskModal({
                     <Text
                       style={[
                         styles.chipText,
-                        { color: isSelected ? '#FFFFFF' : theme.text },
+                        { color: isSelected ? (theme.onAccent ?? '#FFFFFF') : theme.text },
                       ]}
                     >
                       {list.title}
@@ -219,6 +300,61 @@ export function EditTaskModal({
                 );
               })}
             </ScrollView>
+          </View>
+
+          {/* Status (Offen / Erledigt) */}
+          <View style={styles.field}>
+            <Text style={[styles.label, { color: theme.subtext }]}>STATUS</Text>
+            <View style={styles.chipRow}>
+              <TouchableOpacity
+                style={[
+                  styles.chip,
+                  {
+                    backgroundColor:
+                      status === 'needsAction' ? theme.accent : theme.cardBg,
+                  },
+                ]}
+                onPress={() => setStatus('needsAction')}
+              >
+                <Ionicons
+                  name="radio-button-off"
+                  size={15}
+                  color={status === 'needsAction' ? (theme.onAccent ?? '#FFFFFF') : theme.text}
+                />
+                <Text
+                  style={[
+                    styles.chipText,
+                    { color: status === 'needsAction' ? (theme.onAccent ?? '#FFFFFF') : theme.text },
+                  ]}
+                >
+                  Offen
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.chip,
+                  {
+                    backgroundColor:
+                      status === 'completed' ? '#34C759' : theme.cardBg,
+                  },
+                ]}
+                onPress={() => setStatus('completed')}
+              >
+                <Ionicons
+                  name="checkmark-circle"
+                  size={15}
+                  color={status === 'completed' ? '#FFFFFF' : '#34C759'}
+                />
+                <Text
+                  style={[
+                    styles.chipText,
+                    { color: status === 'completed' ? '#FFFFFF' : theme.text },
+                  ]}
+                >
+                  Erledigt
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
           {/* Priority Selection (Apple Reminders style) */}
@@ -371,65 +507,131 @@ export function EditTaskModal({
             </View>
           </View>
 
-          {/* Delete */}
-          <TouchableOpacity
-            style={[styles.deleteButton, { backgroundColor: theme.cardBg }]}
-            onPress={handleDelete}
-          >
-            <Text style={styles.deleteText}>Aufgabe löschen</Text>
-          </TouchableOpacity>
         </ScrollView>
-      </KeyboardAvoidingView>
-    </Modal>
+
+        {/* Bottom Thumb-Zone Action Bar */}
+        <View
+          style={[
+            styles.bottomActionBar,
+            {
+              borderTopColor: theme.glassBorderDim,
+              paddingBottom: Math.max(insets.bottom, 12),
+            },
+          ]}
+        >
+          <TouchableOpacity
+            style={[styles.bottomSaveBtn, { backgroundColor: theme.accent }]}
+            onPress={handleSave}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="checkmark" size={20} color={theme.onAccent ?? '#FFFFFF'} />
+            <Text style={[styles.bottomSaveText, { color: theme.onAccent ?? '#FFFFFF' }]}>Fertig</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+  </View>
+    </KeyboardAvoidingView>
+</Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  keyboardContainer: {
     flex: 1,
   },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    justifyContent: 'flex-end',
+  },
+  backdrop: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+  },
+  sheetContainer: {
+    flexShrink: 1,
+    minHeight: 0,
+    width: '100%',
+    maxWidth: 540,
+    alignSelf: 'center',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderTopWidth: 1.2,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -6 },
+    shadowOpacity: 0.22,
+    shadowRadius: 18,
+    elevation: 12,
+  },
+  grabberRow: {
+    flexShrink: 0,
+    alignItems: 'center',
+    paddingTop: 10,
+    paddingBottom: 4,
+  },
+  grabberPill: {
+    width: 38,
+    height: 5,
+    borderRadius: 2.5,
+  },
   header: {
+    flexShrink: 0,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   headerTitle: {
+    flex: 1,
     fontSize: 17,
-    fontWeight: '600',
+    fontWeight: '700',
+    letterSpacing: -0.3,
   },
-  cancelText: {
-    fontSize: 17,
-  },
-  saveText: {
-    fontSize: 17,
-    fontWeight: '600',
+  closeCircleBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   form: {
     flex: 1,
-    padding: 16,
+    minHeight: 0,
+  },
+  formContent: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 16,
   },
   iosGroup: {
-    borderRadius: 12,
+    borderRadius: 14,
     overflow: 'hidden',
-    marginBottom: 22,
+    marginBottom: 20,
   },
   titleInput: {
     paddingHorizontal: 14,
     paddingVertical: 13,
-    fontSize: 16,
+    fontSize: 16.5,
+    fontWeight: '600',
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   notesInput: {
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 15,
-    minHeight: 85,
+    minHeight: 80,
+    maxHeight: 160,
   },
   field: {
-    marginBottom: 20,
+    marginBottom: 18,
   },
   label: {
     fontSize: 12,
@@ -455,17 +657,37 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
   },
-  deleteButton: {
+  headerDeleteButton: {
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 12,
-    padding: 14,
-    marginTop: 10,
-    marginBottom: 40,
+    width: 44,
+    height: 44,
+    marginRight: 8,
   },
-  deleteText: {
+  bottomActionBar: {
+    flexShrink: 0,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    backgroundColor: 'transparent',
+  },
+  bottomSaveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderRadius: 14,
+    paddingVertical: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  bottomSaveText: {
+    color: '#FFFFFF',
     fontSize: 16,
-    color: '#FF3B30',
-    fontWeight: '500',
+    fontWeight: '700',
+    letterSpacing: -0.2,
   },
 });

@@ -28,12 +28,12 @@ export function LiquidGlassBackground() {
   const orb4 = visibleLists[3]?.color || '#EC4899'; // Pink
 
   const baseColors: [string, string, string] = theme.isDark
-    ? ['#040714', '#0B122C', '#120B29']
-    : ['#D8E6FF', '#EDE4FF', '#D6F4FF'];
+    ? ['#000000', '#040711', '#080E1C']
+    : ['#F8FAFC', '#F1F5F9', '#E8EEF5'];
 
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
-      {/* Deep Fluid Base Gradient */}
+      {/* Deep OLED Fluid Base Gradient */}
       <LinearGradient
         colors={baseColors}
         start={{ x: 0, y: 0 }}
@@ -41,7 +41,7 @@ export function LiquidGlassBackground() {
         style={StyleSheet.absoluteFill}
       />
 
-      {/* Ambient Color Orbs that refract through the Glass Columns & Cards */}
+      {/* Subtle, Sophisticated Ambient Light Cones for Frosted Glass Refraction */}
       <View
         style={[
           styles.orb,
@@ -50,9 +50,9 @@ export function LiquidGlassBackground() {
             height: SCREEN_W * 0.9,
             borderRadius: SCREEN_W * 0.45,
             backgroundColor: orb1,
-            top: -SCREEN_W * 0.2,
+            top: -SCREEN_W * 0.3,
             left: -SCREEN_W * 0.2,
-            opacity: theme.isDark ? 0.34 : 0.42,
+            opacity: theme.isDark ? 0.12 : 0.16,
           },
         ]}
       />
@@ -65,46 +65,16 @@ export function LiquidGlassBackground() {
             height: SCREEN_W * 0.85,
             borderRadius: SCREEN_W * 0.425,
             backgroundColor: orb2,
-            top: SCREEN_H * 0.18,
-            right: -SCREEN_W * 0.25,
-            opacity: theme.isDark ? 0.3 : 0.38,
-          },
-        ]}
-      />
-
-      <View
-        style={[
-          styles.orb,
-          {
-            width: SCREEN_W * 0.95,
-            height: SCREEN_W * 0.95,
-            borderRadius: SCREEN_W * 0.475,
-            backgroundColor: orb3,
-            bottom: SCREEN_H * 0.08,
-            left: -SCREEN_W * 0.25,
-            opacity: theme.isDark ? 0.26 : 0.36,
-          },
-        ]}
-      />
-
-      <View
-        style={[
-          styles.orb,
-          {
-            width: SCREEN_W * 0.75,
-            height: SCREEN_W * 0.75,
-            borderRadius: SCREEN_W * 0.375,
-            backgroundColor: orb4,
-            bottom: -SCREEN_W * 0.15,
-            right: -SCREEN_W * 0.1,
-            opacity: theme.isDark ? 0.28 : 0.34,
+            top: SCREEN_H * 0.35,
+            right: -SCREEN_W * 0.3,
+            opacity: theme.isDark ? 0.10 : 0.14,
           },
         ]}
       />
 
       {/* Native iOS Ultra-Smooth Diffusion Layer */}
       <BlurView
-        intensity={theme.isDark ? 80 : 75}
+        intensity={theme.isDark ? 90 : 80}
         tint={theme.isDark ? 'dark' : 'light'}
         style={StyleSheet.absoluteFill}
       />

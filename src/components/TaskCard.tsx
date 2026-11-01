@@ -1,27 +1,24 @@
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
   Pressable,
   GestureResponderEvent,
+  LayoutChangeEvent,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Haptics from 'expo-haptics';
 import type { Task } from '../db/taskRepo';
 import { useTheme } from '../hooks/useTheme';
-import { useKanbanStore } from '../stores/useKanbanStore';
-import {
-  scheduleFocusTimerNotification,
-  cancelFocusTimerNotification,
-} from '../services/notifications';
 
 interface TaskCardProps {
   task: Task;
   accentColor?: string;
   isDragging?: boolean;
+  onLayoutCard?: (taskId: string, y: number, height: number) => void;
   onToggle: (id: string) => void;
   onEdit: (task: Task) => void;
   onStartDrag: (task: Task, pageX: number, pageY: number) => void;
@@ -38,42 +35,70 @@ export function TaskCard({
   task,
   accentColor = '#007AFF',
   isDragging = false,
+  onLayoutCard,
   onToggle,
   onEdit,
   onStartDrag,
 }: TaskCardProps) {
   const theme = useTheme();
-  const activeFocusTaskId = useKanbanStore((s) => s.activeFocusTaskId);
-  const focusRemainingSeconds = useKanbanStore((s) => s.focusRemainingSeconds);
-  const startFocusTimer = useKanbanStore((s) => s.startFocusTimer);
-  const stopFocusTimer = useKanbanStore((s) => s.stopFocusTimer);
 
   const isCompleted = task.status === 'completed';
-  const isFocused = activeFocusTaskId === task.id;
   const prio = PRIORITY_META[task.priority || 'none'];
 
+  const lastTapRef = useRef<number>(0);
+  const singleTapTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (singleTapTimeoutRef.current) {
+        clearTimeout(singleTapTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Double-tap toggles completed status with haptic feedback
+  // Single-tap opens Edit modal after a brief delay
+  const handleCardPress = () => {
+    const now = Date.now();
+    const DOUBLE_TAP_DELAY = 280;
+
+    if (now - lastTapRef.current < DOUBLE_TAP_DELAY) {
+      if (singleTapTimeoutRef.current) {
+        clearTimeout(singleTapTimeoutRef.current);
+        singleTapTimeoutRef.current = null;
+      }
+      lastTapRef.current = 0;
+      Haptics.notificationAsync(
+        isCompleted
+          ? Haptics.NotificationFeedbackType.Warning
+          : Haptics.NotificationFeedbackType.Success
+      ).catch(() => {});
+      onToggle(task.id);
+    } else {
+      lastTapRef.current = now;
+      if (singleTapTimeoutRef.current) {
+        clearTimeout(singleTapTimeoutRef.current);
+      }
+      singleTapTimeoutRef.current = setTimeout(() => {
+        singleTapTimeoutRef.current = null;
+        onEdit(task);
+      }, DOUBLE_TAP_DELAY);
+    }
+  };
+
   const handleLongPress = (e: GestureResponderEvent) => {
+    if (singleTapTimeoutRef.current) {
+      clearTimeout(singleTapTimeoutRef.current);
+      singleTapTimeoutRef.current = null;
+    }
     const x = e.nativeEvent.pageX || 150;
     const y = e.nativeEvent.pageY || 300;
     onStartDrag(task, x, y);
   };
 
-  const handleToggleFocus = () => {
-    if (isFocused) {
-      stopFocusTimer();
-      cancelFocusTimerNotification();
-    } else {
-      startFocusTimer(task.id, 25);
-      scheduleFocusTimerNotification(task.title, 25 * 60);
-    }
-  };
-
-  const formatTimer = (sec: number) => {
-    const m = Math.floor(sec / 60)
-      .toString()
-      .padStart(2, '0');
-    const s = (sec % 60).toString().padStart(2, '0');
-    return `${m}:${s}`;
+  const handleLayout = (e: LayoutChangeEvent) => {
+    const { y, height } = e.nativeEvent.layout;
+    onLayoutCard?.(task.id, y, height);
   };
 
   const isOverdue =
@@ -81,21 +106,29 @@ export function TaskCard({
     !isCompleted &&
     new Date(task.due).setHours(23, 59, 59, 999) < Date.now();
 
+  const hasBadges = Boolean(
+    (prio && !isCompleted) || task.due || task.reminderAt
+  );
+
   return (
     <Pressable
-      onPress={() => onEdit(task)}
+      onLayout={handleLayout}
+      onPress={handleCardPress}
       onLongPress={handleLongPress}
-      delayLongPress={180}
+      delayLongPress={160}
       style={({ pressed }) => [
         styles.card,
         {
           backgroundColor: theme.isGlass ? 'transparent' : theme.cardBg,
           borderRadius: theme.cardRadius,
-          borderWidth: isFocused ? 2 : 1.1,
-          borderTopColor: isFocused ? accentColor : theme.glassBorderBright,
-          borderLeftColor: isFocused ? accentColor : theme.glassBorderBright,
-          borderRightColor: isFocused ? accentColor : theme.glassBorderDim,
-          borderBottomColor: isFocused ? accentColor : theme.glassBorderDim,
+          borderWidth: 1.1,
+          borderTopColor: theme.isGlass ? theme.glassBorderBright : theme.cardBorder,
+          borderLeftColor: theme.isGlass ? theme.glassBorderBright : theme.cardBorder,
+          borderRightColor: theme.isGlass ? theme.glassBorderDim : theme.cardBorder,
+          borderBottomColor: theme.isGlass ? theme.glassBorderDim : theme.cardBorder,
+          marginBottom: theme.cardGap ?? 10,
+          shadowOpacity: theme.cardShadowOpacity ?? 0.1,
+          elevation: theme.cardShadowOpacity !== undefined ? 0 : 3,
         },
         isCompleted && styles.completedCard,
         pressed && !isDragging && styles.pressedCard,
@@ -105,73 +138,50 @@ export function TaskCard({
         ],
       ]}
     >
-      {/* iOS 27 Liquid Glass Card Surface */}
+      {/* iOS Liquid Glass Card Surface with Atmospheric Color Tint */}
       {theme.isGlass && (
         <View style={StyleSheet.absoluteFill} pointerEvents="none">
           <BlurView
-            intensity={theme.isDark ? 35 : 50}
-            tint={theme.isDark ? 'light' : 'default'}
+            intensity={theme.isDark ? 40 : 55}
+            tint={theme.isDark ? 'dark' : 'light'}
             style={StyleSheet.absoluteFill}
           />
           <LinearGradient
-            colors={[theme.glassSheenStart, theme.glassSheenEnd]}
+            colors={[
+              accentColor + (theme.isDark ? '14' : '0C'),
+              theme.glassSheenStart,
+              theme.glassSheenEnd,
+            ]}
             start={{ x: 0, y: 0 }}
-            end={{ x: 0.9, y: 1 }}
+            end={{ x: 1, y: 1 }}
             style={StyleSheet.absoluteFill}
           />
         </View>
       )}
 
-      {/* Glowing Left Accent Capsule */}
-      <View
-        style={[
-          styles.accentBar,
-          {
-            backgroundColor: isCompleted ? theme.subtext : accentColor,
-          },
-        ]}
-      />
-
-      <View style={styles.cardBody}>
+      <View style={[styles.cardBody, theme.cardPadding !== undefined && { padding: theme.cardPadding, paddingVertical: theme.cardPadding, paddingHorizontal: theme.cardPadding }]}>
         <View style={styles.cardHeader}>
-          {/* Liquid Glass Checkbox */}
-          <TouchableOpacity
-            onPress={() => onToggle(task.id)}
-            style={styles.checkboxHit}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <View
-              style={[
-                styles.checkOuter,
-                {
-                  borderRadius: theme.useCircularCheckbox ? 12 : 7,
-                  borderColor: isCompleted ? '#34C759' : accentColor,
-                  backgroundColor: isCompleted
-                    ? '#34C759'
-                    : accentColor + '24',
-                },
-              ]}
-            >
-              {isCompleted && (
-                <Ionicons name="checkmark" size={14} color="#FFFFFF" />
-              )}
-            </View>
-          </TouchableOpacity>
-
           <View style={styles.titleContainer}>
-            <Text
-              style={[
-                styles.title,
-                { color: theme.text },
-                isCompleted && {
-                  textDecorationLine: 'line-through',
-                  color: theme.subtext,
-                },
-              ]}
-              numberOfLines={3}
-            >
-              {task.title}
-            </Text>
+            <View style={styles.titleRow}>
+              {isCompleted && (
+                <View style={styles.completedBadge}>
+                  <Ionicons name="checkmark-circle" size={17} color="#34C759" />
+                </View>
+              )}
+              <Text
+                style={[
+                  styles.title,
+                  { color: theme.text },
+                  isCompleted && {
+                    textDecorationLine: 'line-through',
+                    color: theme.subtext,
+                  },
+                ]}
+                numberOfLines={3}
+              >
+                {task.title}
+              </Text>
+            </View>
 
             {task.notes ? (
               <Text
@@ -182,136 +192,114 @@ export function TaskCard({
               </Text>
             ) : null}
           </View>
+
+          <View
+            accessible
+            accessibilityLabel="Aufgabe verschieben"
+            accessibilityHint="Zum Verschieben gedrückt halten und ziehen"
+            style={[
+              styles.dragGripShell,
+              {
+                backgroundColor: theme.isDark
+                  ? 'rgba(255, 255, 255, 0.08)'
+                  : 'rgba(0, 0, 0, 0.04)',
+              },
+            ]}
+          >
+            <Ionicons
+              name="reorder-two-outline"
+              size={17}
+              color={theme.subtext}
+            />
+          </View>
         </View>
 
-        {/* Badges & Action Pills Footer */}
-        <View style={styles.cardFooter}>
-          <View style={styles.metaLeft}>
-            {prio && !isCompleted ? (
-              <View
-                style={[
-                  styles.badgePill,
-                  {
-                    backgroundColor: prio.color + '24',
-                    borderColor: prio.color + '55',
-                  },
-                ]}
-              >
-                <Text style={[styles.badgeText, { color: prio.color }]}>
-                  {prio.label}
-                </Text>
-              </View>
-            ) : null}
-
-            {task.due ? (
-              <View
-                style={[
-                  styles.badgePill,
-                  {
-                    backgroundColor: isOverdue
-                      ? '#FF3B3026'
-                      : accentColor + '22',
-                    borderColor: isOverdue
-                      ? '#FF3B3066'
-                      : accentColor + '50',
-                  },
-                ]}
-              >
-                <Ionicons
-                  name="calendar-outline"
-                  size={11}
-                  color={isOverdue ? '#FF3B30' : accentColor}
-                />
-                <Text
+        {/* Badges Footer (only shown when task has priority, due date, reminder, or pending sync) */}
+        {hasBadges && (
+          <View style={styles.cardFooter}>
+            <View style={styles.metaLeft}>
+              {prio && !isCompleted ? (
+                <View
                   style={[
-                    styles.badgeText,
+                    styles.badgePill,
                     {
-                      color: isOverdue
-                        ? '#FF3B30'
-                        : theme.isDark
-                        ? '#FFFFFF'
-                        : accentColor,
+                      backgroundColor: prio.color + '24',
+                      borderColor: prio.color + '55',
                     },
                   ]}
                 >
-                  {new Date(task.due).toLocaleDateString('de-DE', {
-                    day: '2-digit',
-                    month: 'short',
-                  })}
-                </Text>
-              </View>
-            ) : null}
+                  <Text style={[styles.badgeText, { color: prio.color }]}>
+                    {prio.label}
+                  </Text>
+                </View>
+              ) : null}
 
-            {task.reminderAt ? (
-              <View
-                style={[
-                  styles.badgePill,
-                  {
-                    backgroundColor: '#AF52DE26',
-                    borderColor: '#AF52DE66',
-                  },
-                ]}
-              >
-                <Ionicons name="notifications" size={11} color="#AF52DE" />
-                <Text
+              {task.due ? (
+                <View
                   style={[
-                    styles.badgeText,
-                    { color: theme.isDark ? '#E9D5FF' : '#AF52DE' },
+                    styles.badgePill,
+                    {
+                      backgroundColor: isOverdue
+                        ? '#FF3B3026'
+                        : accentColor + '22',
+                      borderColor: isOverdue
+                        ? '#FF3B3066'
+                        : accentColor + '50',
+                    },
                   ]}
                 >
-                  {new Date(task.reminderAt).toLocaleTimeString('de-DE', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}
-                </Text>
-              </View>
-            ) : null}
-          </View>
-
-          <View style={styles.metaRight}>
-            {!isCompleted && (
-              <TouchableOpacity
-                onPress={handleToggleFocus}
-                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                style={[
-                  styles.focusPill,
-                  isFocused
-                    ? {
-                        backgroundColor: accentColor,
-                        borderColor: theme.glassBorderBright,
-                      }
-                    : {
-                        backgroundColor: theme.pillBg,
-                        borderColor: theme.glassBorderBright,
+                  <Ionicons
+                    name="calendar-outline"
+                    size={11}
+                    color={isOverdue ? '#FF3B30' : accentColor}
+                  />
+                  <Text
+                    style={[
+                      styles.badgeText,
+                      {
+                        color: isOverdue
+                          ? '#FF3B30'
+                          : theme.isDark
+                          ? '#FFFFFF'
+                          : accentColor,
                       },
-                ]}
-              >
-                <Ionicons
-                  name={isFocused ? 'pause' : 'timer-outline'}
-                  size={12}
-                  color={isFocused ? '#FFFFFF' : theme.subtext}
-                />
-                <Text
+                    ]}
+                  >
+                    {new Date(task.due).toLocaleDateString('de-DE', {
+                      day: '2-digit',
+                      month: 'short',
+                    })}
+                  </Text>
+                </View>
+              ) : null}
+
+              {task.reminderAt ? (
+                <View
                   style={[
-                    styles.focusText,
-                    { color: isFocused ? '#FFFFFF' : theme.subtext },
+                    styles.badgePill,
+                    {
+                      backgroundColor: '#AF52DE26',
+                      borderColor: '#AF52DE66',
+                    },
                   ]}
                 >
-                  {isFocused ? formatTimer(focusRemainingSeconds) : '25m'}
-                </Text>
-              </TouchableOpacity>
-            )}
-
-            {task.syncStatus === 'pending' ? (
-              <Ionicons
-                name="cloud-upload-outline"
-                size={13}
-                color={accentColor}
-                style={{ opacity: 0.85 }}
-              />
-            ) : null}
+                  <Ionicons name="notifications" size={11} color="#AF52DE" />
+                  <Text
+                    style={[
+                      styles.badgeText,
+                      { color: theme.isDark ? '#E9D5FF' : '#AF52DE' },
+                    ]}
+                  >
+                    {new Date(task.reminderAt).toLocaleTimeString('de-DE', {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
           </View>
-        </View>
+        )}
       </View>
     </Pressable>
   );
@@ -319,29 +307,24 @@ export function TaskCard({
 
 const styles = StyleSheet.create({
   card: {
-    flexDirection: 'row',
     overflow: 'hidden',
     marginBottom: 10,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    elevation: 4,
-  },
-  accentBar: {
-    width: 4.5,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.1,
+    shadowRadius: 13,
+    elevation: 3,
   },
   cardBody: {
-    flex: 1,
     paddingVertical: 12,
-    paddingHorizontal: 13,
+    paddingHorizontal: 14,
   },
   pressedCard: {
-    transform: [{ scale: 0.985 }],
-    opacity: 0.92,
+    transform: [{ scale: 0.98 }],
+    opacity: 0.94,
   },
   completedCard: {
-    opacity: 0.55,
+    opacity: 0.6,
   },
   draggingPlaceholder: {
     opacity: 0.25,
@@ -351,22 +334,22 @@ const styles = StyleSheet.create({
   cardHeader: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 11,
-  },
-  checkboxHit: {
-    marginTop: 1,
-  },
-  checkOuter: {
-    width: 23,
-    height: 23,
-    borderWidth: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
   },
   titleContainer: {
     flex: 1,
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+  },
+  completedBadge: {
+    marginTop: 1,
+  },
   title: {
+    flex: 1,
     fontSize: 15.5,
     fontWeight: '600',
     letterSpacing: -0.25,
@@ -377,12 +360,21 @@ const styles = StyleSheet.create({
     marginTop: 4,
     lineHeight: 18,
   },
+  dragGripShell: {
+    width: 28,
+    height: 28,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: -2,
+    marginLeft: 4,
+  },
   cardFooter: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 9,
-    paddingLeft: 34,
+    marginTop: 8,
+    paddingLeft: 0,
   },
   metaLeft: {
     flexDirection: 'row',
@@ -403,24 +395,5 @@ const styles = StyleSheet.create({
   badgeText: {
     fontSize: 11.5,
     fontWeight: '700',
-  },
-  metaRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  focusPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 999,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  focusText: {
-    fontSize: 11,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
   },
 });

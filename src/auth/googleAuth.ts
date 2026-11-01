@@ -1,8 +1,20 @@
 import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import * as SecureStore from 'expo-secure-store';
+import { rememberTaskAccount } from './taskAccount';
 
 WebBrowser.maybeCompleteAuthSession();
+
+let authVersion = 0;
+let tokenWrites: Promise<void> = Promise.resolve();
+export const getAuthVersion = () => authVersion;
+const assertAuth = (version: number) => { if (version !== authVersion) throw new Error('Die Google-Anmeldung wurde geändert. Bitte versuche es erneut.'); };
+
+function writeAuth(version: number, work: () => Promise<void>) {
+  const writing = tokenWrites.catch(() => {}).then(async () => { assertAuth(version); await work(); assertAuth(version); });
+  tokenWrites = writing;
+  return writing;
+}
 
 // ────────────────────────────────────────────────────────────
 // Google OAuth 2.0 Configuration
@@ -16,6 +28,8 @@ const SCOPES = [
   'email',
   'profile',
   'https://www.googleapis.com/auth/tasks',
+  'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
+  'https://www.googleapis.com/auth/calendar.events',
 ];
 
 const STORAGE_KEYS = {
@@ -24,6 +38,10 @@ const STORAGE_KEYS = {
   EXPIRES_AT: 'google_expires_at',
   USER_EMAIL: 'google_user_email',
   USER_NAME: 'google_user_name',
+};
+
+const TOKEN_STORAGE_OPTIONS: SecureStore.SecureStoreOptions = {
+  keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
 };
 
 export interface GoogleUser {
@@ -56,6 +74,7 @@ export function useGoogleAuth() {
       redirectUri,
       responseType: AuthSession.ResponseType.Code,
       usePKCE: true,
+      extraParams: { prompt: 'consent' },
     },
     discovery
   );
@@ -69,6 +88,7 @@ export async function exchangeCodeForTokens(
   codeVerifier: string,
   redirectUri: string
 ): Promise<AuthTokens> {
+  const version = ++authVersion;
   const tokenResponse = await AuthSession.exchangeCodeAsync(
     {
       clientId: CLIENT_ID_IOS,
@@ -89,24 +109,39 @@ export async function exchangeCodeForTokens(
       : Date.now() + 3600 * 1000,
   };
 
-  await saveTokens(tokens);
+  assertAuth(version);
+  await persistTokens(tokens, version, true);
   return tokens;
 }
 
 // ── Persist / load tokens ───────────────────────────────────
 export async function saveTokens(tokens: AuthTokens): Promise<void> {
-  await SecureStore.setItemAsync(STORAGE_KEYS.ACCESS_TOKEN, tokens.accessToken);
+  return persistTokens(tokens, ++authVersion, true);
+}
+
+async function persistTokens(tokens: AuthTokens, version: number, newLogin = false): Promise<void> {
+  return writeAuth(version, async () => {
+  if (newLogin) {
+    await rememberTaskAccount(await SecureStore.getItemAsync(STORAGE_KEYS.USER_EMAIL));
+    await SecureStore.deleteItemAsync(STORAGE_KEYS.USER_EMAIL);
+    await SecureStore.deleteItemAsync(STORAGE_KEYS.USER_NAME);
+  }
+  await SecureStore.setItemAsync(STORAGE_KEYS.ACCESS_TOKEN, tokens.accessToken, TOKEN_STORAGE_OPTIONS);
   await SecureStore.setItemAsync(
     STORAGE_KEYS.REFRESH_TOKEN,
-    tokens.refreshToken ?? ''
+    tokens.refreshToken ?? '',
+    TOKEN_STORAGE_OPTIONS
   );
   await SecureStore.setItemAsync(
     STORAGE_KEYS.EXPIRES_AT,
-    tokens.expiresAt.toString()
+    tokens.expiresAt.toString(),
+    TOKEN_STORAGE_OPTIONS
   );
+  });
 }
 
 export async function loadTokens(): Promise<AuthTokens | null> {
+  await tokenWrites.catch(() => {});
   const accessToken = await SecureStore.getItemAsync(STORAGE_KEYS.ACCESS_TOKEN);
   const refreshToken = await SecureStore.getItemAsync(STORAGE_KEYS.REFRESH_TOKEN);
   const expiresAtStr = await SecureStore.getItemAsync(STORAGE_KEYS.EXPIRES_AT);
@@ -121,17 +156,22 @@ export async function loadTokens(): Promise<AuthTokens | null> {
 }
 
 export async function clearTokens(): Promise<void> {
+  const version = ++authVersion;
+  return writeAuth(version, async () => {
+  await rememberTaskAccount(await SecureStore.getItemAsync(STORAGE_KEYS.USER_EMAIL)).catch(() => {});
   await SecureStore.deleteItemAsync(STORAGE_KEYS.ACCESS_TOKEN);
   await SecureStore.deleteItemAsync(STORAGE_KEYS.REFRESH_TOKEN);
   await SecureStore.deleteItemAsync(STORAGE_KEYS.EXPIRES_AT);
   await SecureStore.deleteItemAsync(STORAGE_KEYS.USER_EMAIL);
   await SecureStore.deleteItemAsync(STORAGE_KEYS.USER_NAME);
+  });
 }
 
 // ── Token refresh ───────────────────────────────────────────
 export async function refreshAccessToken(
   refreshToken: string
 ): Promise<AuthTokens> {
+  const version = authVersion;
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -153,14 +193,16 @@ export async function refreshAccessToken(
     expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
   };
 
-  await saveTokens(tokens);
+  assertAuth(version);
+  await persistTokens(tokens, version);
   return tokens;
 }
 
 // ── Get a valid (possibly refreshed) access token ──────────
 export async function getValidAccessToken(): Promise<string | null> {
+  const version = authVersion;
   const tokens = await loadTokens();
-  if (!tokens) return null;
+  if (!tokens || !(await loadCachedUser()) || version !== authVersion || !Number.isFinite(tokens.expiresAt)) return null;
 
   // If token expires in less than 5 minutes, refresh it
   if (tokens.expiresAt - Date.now() < 5 * 60 * 1000) {
@@ -178,19 +220,26 @@ export async function getValidAccessToken(): Promise<string | null> {
 
 // ── User info ───────────────────────────────────────────────
 export async function fetchUserInfo(accessToken: string): Promise<GoogleUser> {
+  const version = authVersion;
   const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!res.ok) throw new Error('Failed to fetch user info');
   const data = await res.json();
-
-  const user: GoogleUser = { email: data.email, name: data.name };
+  assertAuth(version);
+  if (typeof data.email !== 'string' || !data.email.trim() || data.email_verified !== true) throw new Error('Das Google-Konto konnte nicht eindeutig bestätigt werden.');
+  const user: GoogleUser = { email: data.email, name: typeof data.name === 'string' ? data.name : data.email };
+  await writeAuth(version, async () => {
+  await rememberTaskAccount(await SecureStore.getItemAsync(STORAGE_KEYS.USER_EMAIL));
+  await rememberTaskAccount(user.email);
   await SecureStore.setItemAsync(STORAGE_KEYS.USER_EMAIL, user.email);
   await SecureStore.setItemAsync(STORAGE_KEYS.USER_NAME, user.name);
+  });
   return user;
 }
 
 export async function loadCachedUser(): Promise<GoogleUser | null> {
+  await tokenWrites.catch(() => {});
   const email = await SecureStore.getItemAsync(STORAGE_KEYS.USER_EMAIL);
   const name = await SecureStore.getItemAsync(STORAGE_KEYS.USER_NAME);
   if (!email) return null;

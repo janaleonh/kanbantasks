@@ -4,7 +4,13 @@
     "slug": "kanban-tasks",
     "version": "1.0.0",
     "orientation": "portrait",
+    "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F4EDE2"
+    },
     "newArchEnabled": true,
     "runtimeVersion": {
       "policy": "sdkVersion"
@@ -17,14 +23,53 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.janasue.kanbantasks",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSLocalNetworkUsageDescription": "Planner verbindet sich mit deinem Synology NAS im Heimnetz, um ausgewählte Dokumente offline bereitzuhalten und von dir ausgewählte Dateien hochzuladen."
       }
     },
     "plugins": [
       "expo-router",
       "expo-sqlite",
       "expo-secure-store",
-      "expo-notifications"
+      "expo-notifications",
+      [
+        "expo-widgets",
+        {
+          "bundleIdentifier": "com.janasue.kanbantasks.widgets",
+          "groupIdentifier": "group.com.janasue.kanbantasks",
+          "widgets": [
+            {
+              "name": "TodayTasks",
+              "displayName": "Heute",
+              "description": "Heute fällige und überfällige Aufgaben auf einen Blick.",
+              "ios": {
+                "supportedFamilies": [
+                  "systemSmall",
+                  "systemMedium",
+                  "systemLarge",
+                  "accessoryRectangular",
+                  "accessoryInline"
+                ],
+                "initialLayout": "src/widgets/TodayTasks.tsx"
+              }
+            },
+            {
+              "name": "TasksOverview",
+              "displayName": "Aufgabenübersicht",
+              "description": "Deine offenen Aufgaben und Listen im Überblick.",
+              "ios": {
+                "supportedFamilies": [
+                  "systemSmall",
+                  "systemMedium",
+                  "systemLarge"
+                ],
+                "initialLayout": "src/widgets/TasksOverview.tsx"
+              }
+            }
+          ]
+        }
+      ],
+      "expo-sharing"
     ],
     "experiments": {
       "typedRoutes": true

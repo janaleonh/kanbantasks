@@ -11,6 +11,7 @@ import {
   Switch,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { useNetworkStatus } from '../src/hooks/useNetworkStatus';
 import {
   useGoogleAuth,
@@ -19,6 +20,7 @@ import {
   loadCachedUser,
   saveTokens,
   clearTokens,
+  getAuthVersion,
   type GoogleUser,
 } from '../src/auth/googleAuth';
 import {
@@ -28,6 +30,9 @@ import {
 } from '../src/stores/useKanbanStore';
 import { COLUMN_PALETTE, type TaskList } from '../src/db/taskListRepo';
 import { ColorPickerModal } from '../src/components/ColorPickerModal';
+import { DesignGallery } from '../src/components/DesignGallery';
+import { CalendarPreferences } from '../src/components/CalendarPreferences';
+import { useCalendarStore } from '../src/stores/useCalendarStore';
 import { useTheme, type DesignPreset } from '../src/hooks/useTheme';
 import { sendTestNotification } from '../src/services/notifications';
 
@@ -55,6 +60,7 @@ const DESIGN_PRESETS: { id: DesignPreset; name: string; desc: string }[] = [
 ];
 
 export default function SettingsScreen() {
+  const router = useRouter();
   const theme = useTheme();
   const { isConnected } = useNetworkStatus();
   const { request, response, promptAsync } = useGoogleAuth();
@@ -63,22 +69,22 @@ export default function SettingsScreen() {
     syncState,
     lastSyncedAt,
     showCompletedByDefault,
-    showOverviewHeader,
     dailyBriefingEnabled,
     themeMode,
     designPreset,
     boardLayout,
+    columnWidth,
     autoSyncDelaySeconds,
     syncWithGoogle,
     toggleTaskListVisibility,
     setTaskListColor,
     removeTaskList,
     setShowCompletedByDefault,
-    setShowOverviewHeader,
     setDailyBriefingEnabled,
     setThemeMode,
     setDesignPreset,
     setBoardLayout,
+    setColumnWidth,
     setAutoSyncDelaySeconds,
   } = useKanbanStore();
 
@@ -98,17 +104,24 @@ export default function SettingsScreen() {
       request?.codeVerifier
     ) {
       setAuthLoading(true);
+      const version = getAuthVersion() + 1;
       exchangeCodeForTokens(
         response.params.code,
         request.codeVerifier,
         request.redirectUri
       )
         .then((tokens) => fetchUserInfo(tokens.accessToken))
-        .then((u) => {
+        .then(async (u) => {
+          if (version !== getAuthVersion()) return;
           setUser(u);
+          await useCalendarStore.getState().connectAccount(u.email);
           return syncWithGoogle();
         })
-        .catch((err) => {
+        .catch(async (err) => {
+          if (version !== getAuthVersion()) return;
+          useCalendarStore.getState().disconnect();
+          await clearTokens();
+          setUser(null);
           Alert.alert('Login fehlgeschlagen', err.message);
         })
         .finally(() => setAuthLoading(false));
@@ -123,21 +136,17 @@ export default function SettingsScreen() {
     const token = manualToken.trim();
     if (!token) return;
     setAuthLoading(true);
+    const version = getAuthVersion() + 1;
     try {
+      useCalendarStore.getState().disconnect();
       await saveTokens({
         accessToken: token,
         refreshToken: null,
         expiresAt: Date.now() + 3600 * 1000,
       });
-      try {
-        const u = await fetchUserInfo(token);
-        setUser(u);
-      } catch {
-        setUser({
-          email: 'Google Tasks verbunden',
-          name: 'Expo Go Test-Account',
-        });
-      }
+      const u = await fetchUserInfo(token);
+      setUser(u);
+      await useCalendarStore.getState().connectAccount(u.email);
       setManualToken('');
       await syncWithGoogle();
       Alert.alert(
@@ -145,6 +154,9 @@ export default function SettingsScreen() {
         'Deine Google Tasks-Listen wurden synchronisiert.'
       );
     } catch (err) {
+      if (version !== getAuthVersion()) return;
+      await clearTokens();
+      setUser(null);
       Alert.alert('Fehler', (err as Error).message);
     } finally {
       setAuthLoading(false);
@@ -161,6 +173,7 @@ export default function SettingsScreen() {
           text: 'Abmelden',
           style: 'destructive',
           onPress: async () => {
+            useCalendarStore.getState().disconnect();
             await clearTokens();
             setUser(null);
           },
@@ -204,365 +217,10 @@ export default function SettingsScreen() {
       style={[styles.container, { backgroundColor: theme.background }]}
       contentContainerStyle={styles.content}
     >
-      {/* Design Preset Selector */}
-      <View style={styles.section}>
-        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>
-          DESIGN-STIL AUSWÄHLEN
-        </Text>
-        {DESIGN_PRESETS.map((p) => {
-          const isSelected = designPreset === p.id;
-          return (
-            <TouchableOpacity
-              key={p.id}
-              onPress={() => setDesignPreset(p.id)}
-              style={[
-                styles.row,
-                { backgroundColor: theme.cardBg, borderColor: theme.border },
-              ]}
-            >
-              <View style={styles.rowLeft}>
-                <Ionicons
-                  name={isSelected ? 'checkmark-circle' : 'ellipse-outline'}
-                  size={22}
-                  color={isSelected ? theme.accent : theme.subtext}
-                />
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.rowTitle, { color: theme.text }]}>
-                    {p.name}
-                  </Text>
-                  <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
-                    {p.desc}
-                  </Text>
-                </View>
-              </View>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-
-      {/* Board Layout & Appearance */}
-      <View style={styles.section}>
-        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>
-          DARSTELLUNG & VERHALTEN
-        </Text>
-
-        {/* Layout Mode Picker */}
-        <View
-          style={[
-            styles.row,
-            { backgroundColor: theme.cardBg, borderColor: theme.border },
-          ]}
-        >
-          <View style={styles.rowLeft}>
-            <Ionicons name="albums-outline" size={22} color={theme.accent} />
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.rowTitle, { color: theme.text }]}>
-                Listen-Anordnung
-              </Text>
-              <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
-                Nebeneinander oder untereinander
-              </Text>
-            </View>
-          </View>
-          <View style={styles.themeSegments}>
-            {(['horizontal', 'vertical'] as BoardLayout[]).map((layout) => {
-              const active = boardLayout === layout;
-              return (
-                <TouchableOpacity
-                  key={layout}
-                  style={[
-                    styles.themeButton,
-                    active && [
-                      styles.themeButtonActive,
-                      { backgroundColor: theme.accent },
-                    ],
-                  ]}
-                  onPress={() => setBoardLayout(layout)}
-                >
-                  <Text
-                    style={[
-                      styles.themeButtonText,
-                      { color: active ? '#FFFFFF' : theme.subtext },
-                    ]}
-                  >
-                    {layout === 'horizontal' ? 'Spalten' : 'Untereinander'}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
-
-        {/* Completed Tasks Toggle */}
-        <View
-          style={[
-            styles.row,
-            { backgroundColor: theme.cardBg, borderColor: theme.border },
-          ]}
-        >
-          <View style={styles.rowLeft}>
-            <Ionicons
-              name="checkmark-done-circle-outline"
-              size={22}
-              color="#34C759"
-            />
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.rowTitle, { color: theme.text }]}>
-                Erledigte Tasks standardmäßig aufklappen
-              </Text>
-              <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
-                Wenn aus, sind erledigte Tasks eingeklappt
-              </Text>
-            </View>
-          </View>
-          <Switch
-            value={showCompletedByDefault}
-            onValueChange={setShowCompletedByDefault}
-            trackColor={{ false: '#D1D1D6', true: '#34C759' }}
-          />
-        </View>
-
-        {/* Theme Mode Picker */}
-        <View
-          style={[
-            styles.row,
-            { backgroundColor: theme.cardBg, borderColor: theme.border },
-          ]}
-        >
-          <View style={styles.rowLeft}>
-            <Ionicons name="contrast-outline" size={22} color="#FF9500" />
-            <Text style={[styles.rowTitle, { color: theme.text }]}>
-              Hell / Dunkel
-            </Text>
-          </View>
-          <View style={styles.themeSegments}>
-            {(['system', 'light', 'dark'] as ThemeMode[]).map((mode) => {
-              const active = themeMode === mode;
-              return (
-                <TouchableOpacity
-                  key={mode}
-                  style={[
-                    styles.themeButton,
-                    active && [
-                      styles.themeButtonActive,
-                      { backgroundColor: theme.accent },
-                    ],
-                  ]}
-                  onPress={() => setThemeMode(mode)}
-                >
-                  <Text
-                    style={[
-                      styles.themeButtonText,
-                      { color: active ? '#FFFFFF' : theme.subtext },
-                    ]}
-                  >
-                    {mode === 'system'
-                      ? 'Auto'
-                      : mode === 'light'
-                      ? 'Hell'
-                      : 'Dunkel'}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
-
-        {/* Auto-Sync Inactivity Delay */}
-        <View
-          style={[
-            styles.row,
-            { backgroundColor: theme.cardBg, borderColor: theme.border },
-          ]}
-        >
-          <View style={styles.rowLeft}>
-            <Ionicons name="timer-outline" size={22} color="#34C759" />
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.rowTitle, { color: theme.text }]}>
-                Auto-Sync nach Ruhezeit
-              </Text>
-              <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
-                Synct erst, wenn solange nichts geändert wurde
-              </Text>
-            </View>
-          </View>
-          <View style={styles.themeSegments}>
-            {[
-              { sec: 10, label: '10s' },
-              { sec: 60, label: '1m' },
-              { sec: 300, label: '5m' },
-              { sec: 0, label: 'Aus' },
-            ].map((opt) => {
-              const active = autoSyncDelaySeconds === opt.sec;
-              return (
-                <TouchableOpacity
-                  key={opt.sec}
-                  style={[
-                    styles.themeButton,
-                    active && [
-                      styles.themeButtonActive,
-                      { backgroundColor: theme.accent },
-                    ],
-                  ]}
-                  onPress={() => setAutoSyncDelaySeconds(opt.sec)}
-                >
-                  <Text
-                    style={[
-                      styles.themeButtonText,
-                      { color: active ? '#FFFFFF' : theme.subtext },
-                    ]}
-                  >
-                    {opt.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
-      </View>
-
-      {/* iPhone Push Notifications */}
-      <View style={styles.section}>
-        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>
-          IPHONE MITTEILUNGEN
-        </Text>
-        <View
-          style={[
-            styles.row,
-            { backgroundColor: theme.cardBg, borderColor: theme.border },
-          ]}
-        >
-          <View style={styles.rowLeft}>
-            <Ionicons name="notifications-outline" size={22} color="#FF3B30" />
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.rowTitle, { color: theme.text }]}>
-                Tägliches Morgen-Briefing (08:30 Uhr)
-              </Text>
-              <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
-                Zeigt dir morgens die Anzahl deiner offenen Aufgaben
-              </Text>
-            </View>
-          </View>
-          <Switch
-            value={dailyBriefingEnabled}
-            onValueChange={setDailyBriefingEnabled}
-            trackColor={{ false: '#D1D1D6', true: '#34C759' }}
-          />
-        </View>
-
-        <TouchableOpacity
-          style={[
-            styles.row,
-            { backgroundColor: theme.cardBg, borderColor: theme.border },
-          ]}
-          onPress={handleTestNotification}
-        >
-          <View style={styles.rowLeft}>
-            <Ionicons name="paper-plane-outline" size={22} color={theme.accent} />
-            <View>
-              <Text style={[styles.rowTitle, { color: theme.text }]}>
-                Test-Mitteilung an dieses iPhone senden
-              </Text>
-              <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
-                Prüft, ob Banner & Ton sofort funktionieren
-              </Text>
-            </View>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color={theme.subtext} />
-        </TouchableOpacity>
-      </View>
-
-      {/* Lists Visibility Selection */}
-      <View style={styles.section}>
-        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>
-          ANGEZEIGTE LISTEN (KANBAN-SPALTEN)
-        </Text>
-        {taskLists.length === 0 ? (
-          <View
-            style={[
-              styles.row,
-              { backgroundColor: theme.cardBg, borderColor: theme.border },
-            ]}
-          >
-            <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
-              Noch keine Listen vorhanden.
-            </Text>
-          </View>
-        ) : (
-          taskLists.map((list) => {
-            const dotColor =
-              list.color ||
-              COLUMN_PALETTE[list.position % COLUMN_PALETTE.length];
-            return (
-              <View
-                key={list.id}
-                style={[
-                  styles.row,
-                  { backgroundColor: theme.cardBg, borderColor: theme.border },
-                ]}
-              >
-                <View style={styles.rowLeft}>
-                  <TouchableOpacity
-                    onPress={() => setColorPickerList(list)}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                    style={[
-                      styles.listColorDotBtn,
-                      { borderColor: dotColor + '66' },
-                    ]}
-                  >
-                    <View
-                      style={[
-                        styles.listColorDot,
-                        { backgroundColor: dotColor },
-                      ]}
-                    />
-                  </TouchableOpacity>
-                  <View style={{ flex: 1 }}>
-                    <Text
-                      style={[styles.rowTitle, { color: theme.text }]}
-                      numberOfLines={1}
-                    >
-                      {list.title}
-                    </Text>
-                    <Text
-                      style={[styles.rowSubtitle, { color: theme.subtext }]}
-                    >
-                      {list.isVisible ? 'Im Board sichtbar' : 'Ausgeblendet'} ·
-                      Farbpunkt antippen zum Ändern
-                    </Text>
-                  </View>
-                </View>
-
-                <View style={styles.listRowActions}>
-                  <TouchableOpacity
-                    onPress={() => handleDeleteList(list.id, list.title)}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    style={{ marginRight: 8 }}
-                  >
-                    <Ionicons
-                      name="trash-outline"
-                      size={18}
-                      color={theme.subtext}
-                    />
-                  </TouchableOpacity>
-                  <Switch
-                    value={list.isVisible}
-                    onValueChange={(val) =>
-                      toggleTaskListVisibility(list.id, val)
-                    }
-                    trackColor={{ false: '#D1D1D6', true: '#34C759' }}
-                  />
-                </View>
-              </View>
-            );
-          })
-        )}
-      </View>
-
       {/* Account & Sync Section */}
       <View style={styles.section}>
         <Text style={[styles.sectionTitle, { color: theme.subtext }]}>
-          GOOGLE KONTO & SYNC
+          KONTO & SYNCHRONISIERUNG
         </Text>
         {user ? (
           <View
@@ -647,6 +305,539 @@ export default function SettingsScreen() {
             <Ionicons name="chevron-forward" size={20} color={theme.subtext} />
           )}
         </TouchableOpacity>
+        {/* Auto-Sync Inactivity Delay */}
+        <View
+          style={[
+            styles.row,
+            styles.choiceRow,
+            { backgroundColor: theme.cardBg, borderColor: theme.border },
+          ]}
+        >
+          <View style={[styles.rowLeft, styles.choiceLabel]}>
+            <Ionicons name="timer-outline" size={22} color="#34C759" />
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.rowTitle, { color: theme.text }]}>
+                Auto-Sync nach Ruhezeit
+              </Text>
+              <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
+                Synct erst, wenn solange nichts geändert wurde
+              </Text>
+            </View>
+          </View>
+          <View style={styles.themeSegments}>
+            {[
+              { sec: 10, label: '10s' },
+              { sec: 60, label: '1m' },
+              { sec: 300, label: '5m' },
+              { sec: 0, label: 'Aus' },
+            ].map((opt) => {
+              const active = autoSyncDelaySeconds === opt.sec;
+              return (
+                <TouchableOpacity
+                  key={opt.sec}
+                  style={[
+                    styles.themeButton,
+                    active && [
+                      styles.themeButtonActive,
+                      { backgroundColor: theme.accent },
+                    ],
+                  ]}
+                  onPress={() => setAutoSyncDelaySeconds(opt.sec)}
+                >
+                  <Text
+                    style={[
+                      styles.themeButtonText,
+                      { color: active ? (theme.onAccent ?? '#FFFFFF') : theme.subtext },
+                    ]}
+                  >
+                    {opt.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.calendarSection}>
+        <CalendarPreferences onConnect={handleSignIn} connecting={authLoading || !request} />
+      </View>
+
+      <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>DOKUMENTE & NAS</Text>
+        <TouchableOpacity accessibilityRole="button" onPress={() => router.push('/nas-settings')} style={[styles.row, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
+          <View style={styles.rowLeft}><Ionicons name="server-outline" size={22} color={theme.accent} /><View style={{ flex: 1 }}><Text style={[styles.rowTitle, { color: theme.text }]}>Synology NAS</Text><Text style={[styles.rowSubtitle, { color: theme.subtext }]}>WebDAV-Verbindung, Heimnetz und Offline-Dokumente</Text></View></View>
+          <Ionicons name="chevron-forward" size={20} color={theme.subtext} />
+        </TouchableOpacity>
+      </View>
+
+      {/* Board Layout & Appearance */}
+      <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>
+          BOARD
+        </Text>
+
+        {/* Layout Mode Picker */}
+        <View
+          style={[
+            styles.row,
+            styles.choiceRow,
+            { backgroundColor: theme.cardBg, borderColor: theme.border },
+          ]}
+        >
+          <View style={[styles.rowLeft, styles.choiceLabel]}>
+            <Ionicons name="albums-outline" size={22} color={theme.accent} />
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.rowTitle, { color: theme.text }]}>
+                Listen-Anordnung
+              </Text>
+              <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
+                Nebeneinander oder untereinander
+              </Text>
+            </View>
+          </View>
+          <View style={styles.themeSegments}>
+            {(['horizontal', 'vertical'] as BoardLayout[]).map((layout) => {
+              const active = boardLayout === layout;
+              return (
+                <TouchableOpacity
+                  key={layout}
+                  style={[
+                    styles.themeButton,
+                    active && [
+                      styles.themeButtonActive,
+                      { backgroundColor: theme.accent },
+                    ],
+                  ]}
+                  onPress={() => setBoardLayout(layout)}
+                >
+                  <Text
+                    style={[
+                      styles.themeButtonText,
+                      { color: active ? (theme.onAccent ?? '#FFFFFF') : theme.subtext },
+                    ]}
+                  >
+                    {layout === 'horizontal' ? 'Spalten' : 'Untereinander'}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+
+        {/* Completed Tasks Toggle */}
+        <View
+          style={[
+            styles.row,
+            { backgroundColor: theme.cardBg, borderColor: theme.border },
+          ]}
+        >
+          <View style={styles.rowLeft}>
+            <Ionicons
+              name="checkmark-done-circle-outline"
+              size={22}
+              color="#34C759"
+            />
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.rowTitle, { color: theme.text }]}>
+                Erledigte Tasks standardmäßig aufklappen
+              </Text>
+              <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
+                Wenn aus, sind erledigte Tasks eingeklappt
+              </Text>
+            </View>
+          </View>
+          <Switch
+            value={showCompletedByDefault}
+            onValueChange={setShowCompletedByDefault}
+            trackColor={{ false: '#D1D1D6', true: '#34C759' }}
+          />
+        </View>
+
+        {/* Spaltenbreite (Horizontales Board) */}
+        <View
+          style={[
+            styles.columnWidthCard,
+            { backgroundColor: theme.cardBg, borderColor: theme.border },
+          ]}
+        >
+          <View style={styles.columnWidthHeaderRow}>
+            <View style={styles.rowLeft}>
+              <Ionicons name="resize-outline" size={22} color={theme.accent} />
+              <View>
+                <Text style={[styles.rowTitle, { color: theme.text }]}>
+                  Spaltenbreite (Board)
+                </Text>
+                <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
+                  Breite der horizontalen Spalten anpassen
+                </Text>
+              </View>
+            </View>
+            <View
+              style={[
+                styles.widthValueBadge,
+                { backgroundColor: theme.pillBg, borderColor: theme.border },
+              ]}
+            >
+              <Text style={[styles.widthValueText, { color: theme.accent }]}>
+                {columnWidth} px
+              </Text>
+            </View>
+          </View>
+
+          {/* Preset Buttons */}
+          <View style={styles.presetRow}>
+            {[
+              { label: 'Kompakt', width: 260 },
+              { label: 'Standard', width: 320 },
+              { label: 'Breit', width: 380 },
+            ].map((p) => {
+              const active = columnWidth === p.width;
+              return (
+                <TouchableOpacity
+                  key={p.width}
+                  style={[
+                    styles.presetBtn,
+                    {
+                      backgroundColor: active ? theme.accent : theme.pillBg,
+                      borderColor: active ? theme.accent : theme.border,
+                    },
+                  ]}
+                  onPress={() => setColumnWidth(p.width)}
+                >
+                  <Text
+                    style={[
+                      styles.presetBtnText,
+                      { color: active ? (theme.onAccent ?? '#FFFFFF') : theme.text },
+                    ]}
+                  >
+                    {p.label} ({p.width})
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          {/* Stepper Fine-Tuning */}
+          <View style={styles.stepperContainer}>
+            <TouchableOpacity
+              style={[
+                styles.stepperBtn,
+                { backgroundColor: theme.pillBg, borderColor: theme.border },
+              ]}
+              disabled={columnWidth <= 220}
+              onPress={() => setColumnWidth(Math.max(220, columnWidth - 10))}
+            >
+              <Ionicons
+                name="remove"
+                size={18}
+                color={columnWidth <= 220 ? theme.subtext : theme.text}
+              />
+              <Text
+                style={[
+                  styles.stepperBtnText,
+                  { color: columnWidth <= 220 ? theme.subtext : theme.text },
+                ]}
+              >
+                10px
+              </Text>
+            </TouchableOpacity>
+
+            {/* Visual Indicator Bar */}
+            <View style={styles.widthBarTrack}>
+              <View
+                style={[
+                  styles.widthBarFill,
+                  {
+                    backgroundColor: theme.accent,
+                    width: `${Math.min(
+                      100,
+                      Math.max(
+                        0,
+                        ((columnWidth - 220) / (380 - 220)) * 100
+                      )
+                    )}%`,
+                  },
+                ]}
+              />
+            </View>
+
+            <TouchableOpacity
+              style={[
+                styles.stepperBtn,
+                { backgroundColor: theme.pillBg, borderColor: theme.border },
+              ]}
+              disabled={columnWidth >= 380}
+              onPress={() => setColumnWidth(Math.min(380, columnWidth + 10))}
+            >
+              <Ionicons
+                name="add"
+                size={18}
+                color={columnWidth >= 380 ? theme.subtext : theme.text}
+              />
+              <Text
+                style={[
+                  styles.stepperBtnText,
+                  { color: columnWidth >= 380 ? theme.subtext : theme.text },
+                ]}
+              >
+                10px
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+
+
+
+      </View>
+
+      {/* Lists Visibility Selection */}
+      <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>
+          LISTEN IM BOARD
+        </Text>
+        {taskLists.length === 0 ? (
+          <View
+            style={[
+              styles.row,
+              { backgroundColor: theme.cardBg, borderColor: theme.border },
+            ]}
+          >
+            <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
+              Noch keine Listen vorhanden.
+            </Text>
+          </View>
+        ) : (
+          taskLists.map((list) => {
+            const dotColor =
+              list.color ||
+              COLUMN_PALETTE[list.position % COLUMN_PALETTE.length];
+            return (
+              <View
+                key={list.id}
+                style={[
+                  styles.row,
+                  { backgroundColor: theme.cardBg, borderColor: theme.border },
+                ]}
+              >
+                <View style={styles.rowLeft}>
+                  <TouchableOpacity
+                    onPress={() => setColorPickerList(list)}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    style={[
+                      styles.listColorDotBtn,
+                      { borderColor: dotColor + '66' },
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.listColorDot,
+                        { backgroundColor: dotColor },
+                      ]}
+                    />
+                  </TouchableOpacity>
+                  <View style={{ flex: 1 }}>
+                    <Text
+                      style={[styles.rowTitle, { color: theme.text }]}
+                      numberOfLines={1}
+                    >
+                      {list.title}
+                    </Text>
+                    <Text
+                      style={[styles.rowSubtitle, { color: theme.subtext }]}
+                    >
+                      {list.isVisible ? 'Im Board sichtbar' : 'Ausgeblendet'} ·
+                      Farbpunkt antippen zum Ändern
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.listRowActions}>
+                  <TouchableOpacity
+                    onPress={() => handleDeleteList(list.id, list.title)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    style={{ marginRight: 8 }}
+                  >
+                    <Ionicons
+                      name="trash-outline"
+                      size={18}
+                      color={theme.subtext}
+                    />
+                  </TouchableOpacity>
+                  <Switch
+                    value={list.isVisible}
+                    onValueChange={(val) =>
+                      toggleTaskListVisibility(list.id, val)
+                    }
+                    trackColor={{ false: '#D1D1D6', true: '#34C759' }}
+                  />
+                </View>
+              </View>
+            );
+          })
+        )}
+      </View>
+
+      {/* Design Preset Selector */}
+      <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>
+          ERSCHEINUNGSBILD
+        </Text>
+        {/* Theme Mode Picker */}
+        <View
+          style={[
+            styles.row,
+            styles.choiceRow,
+            { backgroundColor: theme.cardBg, borderColor: theme.border },
+          ]}
+        >
+          <View style={[styles.rowLeft, styles.choiceLabel]}>
+            <Ionicons name="contrast-outline" size={22} color="#FF9500" />
+            <Text style={[styles.rowTitle, { color: theme.text }]}>
+              Hell / Dunkel
+            </Text>
+          </View>
+          <View style={styles.themeSegments}>
+            {(['system', 'light', 'dark'] as ThemeMode[]).map((mode) => {
+              const active = themeMode === mode;
+              return (
+                <TouchableOpacity
+                  key={mode}
+                  style={[
+                    styles.themeButton,
+                    active && [
+                      styles.themeButtonActive,
+                      { backgroundColor: theme.accent },
+                    ],
+                  ]}
+                  onPress={() => setThemeMode(mode)}
+                >
+                  <Text
+                    style={[
+                      styles.themeButtonText,
+                      { color: active ? (theme.onAccent ?? '#FFFFFF') : theme.subtext },
+                    ]}
+                  >
+                    {mode === 'system'
+                      ? 'Auto'
+                      : mode === 'light'
+                      ? 'Hell'
+                      : 'Dunkel'}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+        <View style={styles.designGallery}><DesignGallery /></View>
+        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>WEITERE STILE</Text>
+        {DESIGN_PRESETS.map((p) => {
+          const isSelected = designPreset === p.id;
+          return (
+            <TouchableOpacity
+              key={p.id}
+              onPress={() => setDesignPreset(p.id)}
+              style={[
+                styles.row,
+                { backgroundColor: theme.cardBg, borderColor: theme.border },
+              ]}
+            >
+              <View style={styles.rowLeft}>
+                <Ionicons
+                  name={isSelected ? 'checkmark-circle' : 'ellipse-outline'}
+                  size={22}
+                  color={isSelected ? theme.accent : theme.subtext}
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.rowTitle, { color: theme.text }]}>
+                    {p.name}
+                  </Text>
+                  <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
+                    {p.desc}
+                  </Text>
+                </View>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      {/* iPhone Push Notifications */}
+      <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>
+          MITTEILUNGEN
+        </Text>
+        <View
+          style={[
+            styles.row,
+            { backgroundColor: theme.cardBg, borderColor: theme.border },
+          ]}
+        >
+          <View style={styles.rowLeft}>
+            <Ionicons name="notifications-outline" size={22} color="#FF3B30" />
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.rowTitle, { color: theme.text }]}>
+                Tägliches Morgen-Briefing (08:30 Uhr)
+              </Text>
+              <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
+                Zeigt dir morgens die Anzahl deiner offenen Aufgaben
+              </Text>
+            </View>
+          </View>
+          <Switch
+            value={dailyBriefingEnabled}
+            onValueChange={setDailyBriefingEnabled}
+            trackColor={{ false: '#D1D1D6', true: '#34C759' }}
+          />
+        </View>
+
+        <TouchableOpacity
+          style={[
+            styles.row,
+            { backgroundColor: theme.cardBg, borderColor: theme.border },
+          ]}
+          onPress={handleTestNotification}
+        >
+          <View style={styles.rowLeft}>
+            <Ionicons name="paper-plane-outline" size={22} color={theme.accent} />
+            <View>
+              <Text style={[styles.rowTitle, { color: theme.text }]}>
+                Test-Mitteilung an dieses iPhone senden
+              </Text>
+              <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
+                Prüft, ob Banner & Ton sofort funktionieren
+              </Text>
+            </View>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={theme.subtext} />
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>BEDIENUNG</Text>
+        {/* Task Completion Tip */}
+        <View
+          style={[
+            styles.hintRow,
+            { backgroundColor: theme.cardBg, borderColor: theme.border },
+          ]}
+        >
+          <Ionicons
+            name="information-circle-outline"
+            size={22}
+            color={theme.accent}
+          />
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.hintTitle, { color: theme.text }]}>
+              Aufgaben schnell abhaken
+            </Text>
+            <Text style={[styles.hintText, { color: theme.subtext }]}>
+              Doppeltippe auf eine Karte, um sie als erledigt/offen zu
+              markieren. Ein einfacher Tipp öffnet die Details zum Bearbeiten.
+            </Text>
+          </View>
+        </View>
       </View>
 
       <ColorPickerModal
@@ -675,6 +866,23 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingBottom: 40,
+  },
+  calendarSection: {
+    marginTop: 22,
+    marginHorizontal: 20,
+  },
+  choiceRow: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 12,
+  },
+  choiceLabel: {
+    flex: 0,
+    alignSelf: 'stretch',
+  },
+  designGallery: {
+    marginHorizontal: 20,
+    marginTop: 16,
   },
   section: {
     marginTop: 22,
@@ -729,6 +937,8 @@ const styles = StyleSheet.create({
   },
   themeSegments: {
     flexDirection: 'row',
+    alignSelf: 'flex-start',
+    flexWrap: 'wrap',
     backgroundColor: '#7676801F',
     borderRadius: 8,
     padding: 2,
@@ -749,5 +959,91 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#FF3B30',
     fontWeight: '600',
+  },
+  columnWidthCard: {
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    gap: 12,
+  },
+  columnWidthHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  widthValueBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  widthValueText: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  presetRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  presetBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  presetBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  stepperContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 2,
+  },
+  stepperBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  stepperBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  widthBarTrack: {
+    flex: 1,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#7676801F',
+    overflow: 'hidden',
+  },
+  widthBarFill: {
+    height: '100%',
+    borderRadius: 3,
+  },
+  hintRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  hintTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  hintText: {
+    fontSize: 13,
+    lineHeight: 18,
   },
 });

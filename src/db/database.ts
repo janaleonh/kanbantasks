@@ -3,12 +3,24 @@ import * as SQLite from 'expo-sqlite';
 const DB_NAME = 'kanban_tasks.db';
 
 let db: SQLite.SQLiteDatabase | null = null;
+let opening: Promise<SQLite.SQLiteDatabase> | null = null;
 
 export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
   if (db) return db;
-  db = await SQLite.openDatabaseAsync(DB_NAME);
-  await runMigrations(db);
-  return db;
+  if (!opening) {
+    opening = (async () => {
+      const database = await SQLite.openDatabaseAsync(DB_NAME);
+      try {
+        await runMigrations(database);
+        db = database;
+        return database;
+      } catch (error) {
+        await database.closeAsync();
+        throw error;
+      }
+    })().finally(() => { opening = null; });
+  }
+  return opening;
 }
 
 async function runMigrations(database: SQLite.SQLiteDatabase): Promise<void> {

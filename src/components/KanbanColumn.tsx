@@ -18,18 +18,24 @@ import { ColorPickerModal } from './ColorPickerModal';
 import type { Task } from '../db/taskRepo';
 import { COLUMN_PALETTE, type TaskList } from '../db/taskListRepo';
 import type { BoardLayout } from '../stores/useKanbanStore';
+import { TodayCalendarEvents } from './TodayCalendarEvents';
 import { useTheme } from '../hooks/useTheme';
 
 interface KanbanColumnProps {
   list: TaskList;
   tasks: Task[];
   layoutMode: BoardLayout;
+  columnWidth?: number;
   showCompletedByDefault: boolean;
   draggingTaskId: string | null;
   isDropTarget: boolean;
+  dropInsertIndex: number | null;
   isColumnDragging: boolean;
   isColumnDropTarget: boolean;
   onLayoutColumn?: (listId: string, y: number, height: number) => void;
+  onLayoutTask?: (listId: string, taskId: string, y: number, height: number) => void;
+  onLayoutHeader?: (listId: string, height: number) => void;
+  onScrollColumn?: (listId: string, scrollY: number) => void;
   onAddTask: (listId: string, title: string) => void;
   onToggleTask: (id: string) => void;
   onEditTask: (task: Task) => void;
@@ -43,12 +49,17 @@ export function KanbanColumn({
   list,
   tasks,
   layoutMode,
+  columnWidth = 306,
   showCompletedByDefault,
   draggingTaskId,
   isDropTarget,
+  dropInsertIndex,
   isColumnDragging,
   isColumnDropTarget,
   onLayoutColumn,
+  onLayoutTask,
+  onLayoutHeader,
+  onScrollColumn,
   onAddTask,
   onToggleTask,
   onEditTask,
@@ -76,13 +87,20 @@ export function KanbanColumn({
   const columnColor =
     list.color || COLUMN_PALETTE[list.position % COLUMN_PALETTE.length];
 
+  const isSubmittingTask = React.useRef(false);
+
   const handleAddTask = useCallback(() => {
+    if (isSubmittingTask.current) return;
     const trimmed = newTaskTitle.trim();
     if (trimmed) {
+      isSubmittingTask.current = true;
       onAddTask(list.id, trimmed);
-      setNewTaskTitle('');
-      setIsAdding(false);
     }
+    setNewTaskTitle('');
+    setIsAdding(false);
+    setTimeout(() => {
+      isSubmittingTask.current = false;
+    }, 200);
   }, [newTaskTitle, list.id, onAddTask]);
 
   const handleRename = useCallback(() => {
@@ -115,61 +133,83 @@ export function KanbanColumn({
 
   const taskContent = (
     <>
-      {activeTasks.map((task) => (
-        <TaskCard
-          key={task.id}
-          task={task}
-          accentColor={columnColor}
-          isDragging={draggingTaskId === task.id}
-          onToggle={onToggleTask}
-          onEdit={onEditTask}
-          onStartDrag={onTaskStartDrag}
-        />
+      {activeTasks.map((task, idx) => (
+        <React.Fragment key={task.id}>
+          {isDropTarget && dropInsertIndex === idx && (
+            <View style={styles.dropInsertionRow} pointerEvents="none">
+              <View
+                style={[styles.dropInsertionDot, { backgroundColor: columnColor }]}
+              />
+              <View
+                style={[styles.dropInsertionBar, { backgroundColor: columnColor }]}
+              />
+            </View>
+          )}
+          <TaskCard
+            task={task}
+            accentColor={columnColor}
+            isDragging={draggingTaskId === task.id}
+            onLayoutCard={(taskId, y, height) =>
+              onLayoutTask?.(list.id, taskId, y, height)
+            }
+            onToggle={onToggleTask}
+            onEdit={onEditTask}
+            onStartDrag={onTaskStartDrag}
+          />
+        </React.Fragment>
       ))}
+      {isDropTarget &&
+        dropInsertIndex !== null &&
+        dropInsertIndex >= activeTasks.length && (
+          <View style={styles.dropInsertionRow} pointerEvents="none">
+            <View
+              style={[styles.dropInsertionDot, { backgroundColor: columnColor }]}
+            />
+            <View
+              style={[styles.dropInsertionBar, { backgroundColor: columnColor }]}
+            />
+          </View>
+        )}
 
-      {/* Add Task inline */}
+      {/* Add Task inline - sleek in-place glass card without buttons */}
+      {list.title.trim().toLocaleLowerCase('de-DE') === 'heute' && <TodayCalendarEvents />}
       {isAdding ? (
         <View
           style={[
-            styles.addTaskForm,
+            styles.addTaskCard,
             {
-              backgroundColor: theme.inputBg,
+              backgroundColor: theme.isGlass
+                ? theme.isDark
+                  ? 'rgba(255, 255, 255, 0.08)'
+                  : 'rgba(255, 255, 255, 0.70)'
+                : theme.cardBg,
               borderRadius: theme.cardRadius,
-              borderColor: columnColor,
+              borderTopColor: theme.glassBorderBright,
+              borderLeftColor: theme.glassBorderBright,
+              borderRightColor: theme.glassBorderDim,
+              borderBottomColor: theme.glassBorderDim,
             },
           ]}
         >
+          {theme.isGlass && (
+            <BlurView
+              intensity={theme.isDark ? 40 : 60}
+              tint={theme.isDark ? 'dark' : 'light'}
+              style={StyleSheet.absoluteFill}
+            />
+          )}
           <TextInput
-            style={[
-              styles.addTaskInput,
-              { color: theme.text, borderBottomColor: theme.border },
-            ]}
-            placeholder="Neue Aufgabe..."
+            style={[styles.addTaskInput, { color: theme.text }]}
+            placeholder="Aufgabe eingeben..."
             placeholderTextColor={theme.subtext}
             value={newTaskTitle}
             onChangeText={setNewTaskTitle}
+            onBlur={handleAddTask}
             onSubmitEditing={handleAddTask}
             autoFocus
             returnKeyType="done"
+            blurOnSubmit
           />
-          <View style={styles.addTaskActions}>
-            <TouchableOpacity
-              style={[styles.addButton, { backgroundColor: columnColor }]}
-              onPress={handleAddTask}
-            >
-              <Text style={styles.addButtonText}>Hinzufügen</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => {
-                setIsAdding(false);
-                setNewTaskTitle('');
-              }}
-            >
-              <Text style={[styles.cancelButtonText, { color: theme.subtext }]}>
-                Abbrechen
-              </Text>
-            </TouchableOpacity>
-          </View>
         </View>
       ) : (
         <TouchableOpacity
@@ -241,9 +281,13 @@ export function KanbanColumn({
     <View
       onLayout={handleLayout}
       style={[
-        isVertical ? styles.columnVertical : styles.columnHorizontal,
+        isVertical
+          ? styles.columnVertical
+          : [styles.columnHorizontal, { width: columnWidth }],
         {
           borderRadius: theme.columnRadius,
+          shadowOpacity: theme.cardShadowOpacity !== undefined ? 0 : 0.14,
+          elevation: theme.cardShadowOpacity !== undefined ? 0 : 5,
           backgroundColor: theme.isGlass
             ? 'transparent'
             : theme.tintColumns
@@ -268,11 +312,11 @@ export function KanbanColumn({
         isColumnDragging && styles.columnDragging,
       ]}
     >
-      {/* iOS 27 Liquid Glass Backdrop Blur + Specular Diagonal Sheen */}
+      {/* iOS Liquid Frosted Glass Column Material with Atmospheric Tint */}
       {theme.isGlass && (
         <View style={StyleSheet.absoluteFill} pointerEvents="none">
           <BlurView
-            intensity={theme.isDark ? 45 : 60}
+            intensity={theme.isDark ? 50 : 65}
             tint={
               theme.isDark
                 ? 'systemChromeMaterialDark'
@@ -282,28 +326,25 @@ export function KanbanColumn({
           />
           <LinearGradient
             colors={[
-              columnColor + (theme.isDark ? '28' : '22'),
-              theme.glassSheenStart,
-              theme.glassSheenEnd,
+              columnColor + (theme.isDark ? '1C' : '12'),
+              columnColor + (theme.isDark ? '06' : '04'),
+              'transparent',
             ]}
             locations={[0, 0.35, 1]}
             start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
+            end={{ x: 0.6, y: 1 }}
             style={StyleSheet.absoluteFill}
           />
         </View>
       )}
 
-      {/* Glowing Specular Top Edge Reflection */}
-      <LinearGradient
-        colors={['transparent', columnColor, 'transparent']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 0 }}
-        style={styles.topColorBar}
-      />
-
       {/* Column Header */}
-      <View style={styles.header}>
+      <View
+        style={styles.header}
+        onLayout={(e) =>
+          onLayoutHeader?.(list.id, e.nativeEvent.layout.height)
+        }
+      >
         <View style={styles.headerContent}>
           <TouchableOpacity
             onPress={() => setIsColorPickerOpen(true)}
@@ -345,7 +386,7 @@ export function KanbanColumn({
               style={styles.titleHitArea}
             >
               <Text
-                style={[styles.title, { color: theme.text }]}
+                style={[styles.title, { color: theme.text, fontFamily: theme.headingFont }]}
                 numberOfLines={1}
               >
                 {list.title}
@@ -392,35 +433,6 @@ export function KanbanColumn({
             </View>
           </View>
         </View>
-
-        {/* Completion Progress Bar */}
-        {totalCount > 0 && (
-          <View style={styles.progressRow}>
-            <View
-              style={[
-                styles.progressTrack,
-                {
-                  backgroundColor: theme.isDark
-                    ? 'rgba(255,255,255,0.12)'
-                    : 'rgba(15,23,42,0.08)',
-                },
-              ]}
-            >
-              <View
-                style={[
-                  styles.progressFill,
-                  {
-                    width: `${Math.round(progressRatio * 100)}%`,
-                    backgroundColor: columnColor,
-                  },
-                ]}
-              />
-            </View>
-            <Text style={[styles.progressLabel, { color: theme.subtext }]}>
-              {completedTasks.length}/{totalCount}
-            </Text>
-          </View>
-        )}
       </View>
 
       <ColorPickerModal
@@ -439,6 +451,10 @@ export function KanbanColumn({
           style={styles.taskList}
           contentContainerStyle={styles.taskListContent}
           showsVerticalScrollIndicator={false}
+          scrollEventThrottle={16}
+          onScroll={(e) =>
+            onScrollColumn?.(list.id, e.nativeEvent.contentOffset.y)
+          }
         >
           {taskContent}
         </ScrollView>
@@ -448,6 +464,24 @@ export function KanbanColumn({
 }
 
 const styles = StyleSheet.create({
+  dropInsertionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 4,
+    paddingHorizontal: 2,
+  },
+  dropInsertionDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 4.5,
+    marginRight: -2,
+    zIndex: 2,
+  },
+  dropInsertionBar: {
+    flex: 1,
+    height: 3,
+    borderRadius: 2,
+  },
   columnHorizontal: {
     width: 306,
     marginRight: 14,
@@ -472,14 +506,10 @@ const styles = StyleSheet.create({
   columnDragging: {
     opacity: 0.35,
   },
-  topColorBar: {
-    height: 3.5,
-    width: '100%',
-  },
   header: {
     paddingTop: 14,
     paddingHorizontal: 14,
-    paddingBottom: 6,
+    paddingBottom: 10,
   },
   headerContent: {
     flexDirection: 'row',
@@ -565,6 +595,16 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
+  sortHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 8,
+  },
+  sortHintText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
   taskList: {
     flex: 1,
   },
@@ -589,42 +629,30 @@ const styles = StyleSheet.create({
     fontSize: 12.5,
     fontWeight: '700',
   },
-  addTaskForm: {
-    padding: 12,
-    marginTop: 4,
-    borderWidth: 1.5,
+  addTaskCard: {
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 10,
+    borderWidth: 1.1,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    elevation: 3,
   },
   addTaskInput: {
-    fontSize: 15,
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-  },
-  addTaskActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 10,
-  },
-  addButton: {
-    borderRadius: 999,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  addButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  cancelButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
+    fontSize: 15.5,
+    fontWeight: '500',
+    paddingVertical: 2,
+    lineHeight: 21,
   },
   addTaskTrigger: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 7,
-    paddingVertical: 11,
+    paddingVertical: 12,
     paddingHorizontal: 14,
     borderRadius: 999,
     borderWidth: 1,
