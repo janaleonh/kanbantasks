@@ -44,23 +44,16 @@ jobs:
             pkg = pkg.replace(/\s*\"-Werror\",\s*\"[A-Za-z]+\",/g, "");
             fs.writeFileSync(base + "/Package.swift", pkg);
 
-            // 2. JavaScriptRuntime.swift: replace bare-slash regex literal with Regex(...)
-            let rt = fs.readFileSync(base + "/Sources/ExpoModulesJSI/Runtime/JavaScriptRuntime.swift", "utf8");
-            rt = rt.replace("name.wholeMatch(of: /^[a-zA-Z_$][a-zA-Z0-9_$]*$/)", "name.wholeMatch(of: try! Regex(#\"^[a-zA-Z_$][a-zA-Z0-9_$]*$\"#))");
-            fs.writeFileSync(base + "/Sources/ExpoModulesJSI/Runtime/JavaScriptRuntime.swift", rt);
-
-            // 3. JavaScriptPromise.swift: add nonisolated init() to LongLivedState
-            let prom = fs.readFileSync(base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptPromise.swift", "utf8");
-            prom = prom.replace("func allowRelease() {", "nonisolated init() {}\n\n    func allowRelease() {");
-            fs.writeFileSync(base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptPromise.swift", prom);
-
-            // 4. JavaScriptObject.swift: wrap slot pointer in UncheckedSendable
+            // 2. JavaScriptObject.swift: wrap slot pointer in UncheckedSendable
             let obj = fs.readFileSync(base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptObject.swift", "utf8");
-            obj = obj.replace("nonisolated(unsafe) let slot = buffer.baseAddress!", "nonisolated(unsafe) let slot = buffer.baseAddress!\n    let sendableSlot = UncheckedSendable(slot)");
-            obj = obj.replace("try encode(JavaScriptValue.Slot(slot), runtime)", "try encode(JavaScriptValue.Slot(sendableSlot.value), runtime)");
+            obj = obj.replace("nonisolated(unsafe) let slot = buffer.baseAddress!", "let slot = UncheckedSendable(buffer.baseAddress!)");
+            obj = obj.replace("expo.emplaceUndefined(slot)", "expo.emplaceUndefined(slot.value)");
+            obj = obj.replace("expo.destroyValues(slot, 1)", "expo.destroyValues(slot.value, 1)");
+            obj = obj.replace("try encode(JavaScriptValue.Slot(slot), runtime)", "try encode(JavaScriptValue.Slot(slot.value), runtime)");
+            obj = obj.replace("body(slot.pointee)", "body(slot.value.pointee)");
             fs.writeFileSync(base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptObject.swift", obj);
 
-            // 5. JavaScriptFunction.swift: wrap arguments and result pointers in UncheckedSendable
+            // 3. JavaScriptFunction.swift: wrap arguments and result pointers in UncheckedSendable
             let fn = fs.readFileSync(base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptFunction.swift", "utf8");
             fn = fn.replace("nonisolated(unsafe) let arguments = storage.baseAddress!", "let arguments = UncheckedSendable(storage.baseAddress!)");
             fn = fn.replace("nonisolated(unsafe) let result = arguments + argumentCount", "let result = UncheckedSendable(arguments.value + argumentCount)");
@@ -71,16 +64,7 @@ jobs:
             fn = fn.replace("JavaScriptUnownedValue(runtime.pointee, result), runtime)", "JavaScriptUnownedValue(runtime.pointee, result.value), runtime)");
             fs.writeFileSync(base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptFunction.swift", fn);
 
-            // 6. JavaScriptValuesBuffer.swift: wrap start pointer in UncheckedSendable
-            let buf = fs.readFileSync(base + "/Sources/ExpoModulesJSI/Runtime/JavaScriptValuesBuffer.swift", "utf8");
-            buf = buf.replace("let start = storage.baseAddress", "let start = UncheckedSendable(storage.baseAddress)");
-            buf = buf.replace("if let start {", "if let ptr = start.value {");
-            buf = buf.replace("start + index", "ptr + index");
-            buf = buf.replace("expo.destroyValues(start, count)", "expo.destroyValues(ptr, count)");
-            buf = buf.replace("start: start,", "start: start.value,");
-            fs.writeFileSync(base + "/Sources/ExpoModulesJSI/Runtime/JavaScriptValuesBuffer.swift", buf);
-
-            // 7. build-xcframework.sh: remove -quiet for clear logs
+            // 4. build-xcframework.sh: remove -quiet for clear logs
             let sh = fs.readFileSync(base + "/scripts/build-xcframework.sh", "utf8");
             sh = sh.replace("    -quiet \\\n", "");
             fs.writeFileSync(base + "/scripts/build-xcframework.sh", sh);
@@ -116,9 +100,10 @@ jobs:
 
       - name: Prebuild ExpoModulesJSI.xcframework (isolated step with clear log)
         run: |
+          set -o pipefail
           export PODS_ROOT="$PWD/ios/Pods"
           export PLATFORM_NAME="iphoneos"
-          bash node_modules/expo-modules-jsi/apple/scripts/build-xcframework.sh
+          bash node_modules/expo-modules-jsi/apple/scripts/build-xcframework.sh 2>&1 | tee ios/xcodebuild.log
 
       - name: Build Unsigned Release .app via Xcode
         run: |
@@ -144,11 +129,14 @@ jobs:
             PROVISIONING_PROFILE_SPECIFIER="" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
             COMPILER_INDEX_STORE_ENABLE=NO \
-            build 2>&1 | tee xcodebuild.log
+            build 2>&1 | tee -a xcodebuild.log
 
       - name: Show real compiler errors (open this step if build failed)
         if: failure()
         run: |
+          grep -nE "error:|: error |fatal error|did not produce|No such module|cannot find" ios/xcodebuild.log | cut -c1-300 | head -n 10 | while IFS= read -r line; do
+            echo "::error title=XcodeError::$line"
+          done
           {
             echo "## Xcode error summary (short)"
             echo '```'
