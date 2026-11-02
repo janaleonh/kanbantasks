@@ -50,7 +50,7 @@ export class WebDavClient {
     signal.addEventListener('abort', abort);
     const timeout = setTimeout(abort, options.method === 'PROPFIND' ? 20000 : 120000);
     try {
-      const response = await this.transport(remoteUrl(this.config, path, options.method === 'PROPFIND'), {
+      const response = await this.transport(remoteUrl(this.config, path, options.method === 'PROPFIND' || options.method === 'MKCOL'), {
         ...options, redirect: 'error', credentials: 'omit', signal: controller.signal,
         headers: { Authorization: `Basic ${Base64.encode(`${this.config.username}:${this.password}`)}`, ...options.headers },
       });
@@ -84,6 +84,15 @@ export class WebDavClient {
     const entry = entries.find((entry) => entry.path === path);
     if (!entry) throw new DavError('Die Datei oder der Ordner konnte nicht gelesen werden.', 404);
     return entry;
+  }
+
+  async ensureDirectory(path: string, signal: AbortSignal) {
+    try { await this.withResponse(path, { method: 'MKCOL' }, signal, async response => { if (response.status !== 201) throw new DavError('Der Sicherungsordner konnte nicht angelegt werden.'); await response.body?.cancel(); }); }
+    catch (error) {
+      if (!(error instanceof DavError) || error.status !== 405) throw error;
+      const existing = await this.stat(path, signal);
+      if (!existing.directory) throw new DavError('Der Sicherungsordner ist durch eine gleichnamige Datei blockiert.');
+    }
   }
 
   async upload(folder: string, source: UploadSource, signal: AbortSignal) {

@@ -10,11 +10,12 @@ import { useDocumentStore } from '../src/stores/useDocumentStore';
 import type { DavEntry } from '../src/documents/types';
 import { formatBytes } from '../src/documents/paths';
 import { useTheme } from '../src/hooks/useTheme';
+import { getTaskById } from '../src/db/taskRepo';
 
 type Lease = Awaited<ReturnType<ReturnType<typeof useDocumentStore.getState>['openFile']>>;
 
 export default function DocumentScreen() {
-  const { path } = useLocalSearchParams<{ path: string }>();
+  const { path, taskId } = useLocalSearchParams<{ path: string; taskId?: string }>();
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const configId = useDocumentStore((state) => state.config?.id);
@@ -36,7 +37,12 @@ export default function DocumentScreen() {
       try {
         const state = useDocumentStore.getState();
         const favorite = state.manifest.favorites.find((favorite) => favorite.path === path && !favorite.directory);
-        const found = state.manifest.offline[path]?.entry || Object.values(state.manifest.folders).flatMap((folder) => folder.entries).find((entry) => entry.path === path && !entry.directory) || (favorite ? { ...favorite, size: null, modified: null, etag: null, mimeType: 'application/octet-stream' } : null);
+        let found = state.manifest.offline[path]?.entry || Object.values(state.manifest.folders).flatMap((folder) => folder.entries).find((entry) => entry.path === path && !entry.directory) || (favorite ? { ...favorite, size: null, modified: null, etag: null, mimeType: 'application/octet-stream' } : null);
+        if (!found && taskId && state.config) {
+          const task = await getTaskById(taskId);
+          const attached = !task?.deletedLocally && task?.attachments?.find(attachment => attachment.configId === state.config!.id && attachment.path === path);
+          if (attached && !closed) found = await state.getRemoteEntry(path, attached.configId);
+        }
         if (!state.config || !found) throw new Error('Dieses Dokument ist nicht mehr in deiner Dokumentenliste. Bitte öffne es erneut über den Explorer.');
         if (closed) return;
         setEntry(found);
@@ -61,7 +67,7 @@ export default function DocumentScreen() {
       finally { if (!closed) setLoading(false); }
     })();
     return () => { closed = true; current?.release(); if (lease.current === current) lease.current = null; };
-  }, [path, configId, initialized]);
+  }, [path, taskId, configId, initialized]);
   const share = async () => {
     if (!uri || sharing || !lease.current) return;
     let release: (() => void) | undefined;

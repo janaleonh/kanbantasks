@@ -32,9 +32,13 @@ import { COLUMN_PALETTE, type TaskList } from '../src/db/taskListRepo';
 import { ColorPickerModal } from '../src/components/ColorPickerModal';
 import { DesignGallery } from '../src/components/DesignGallery';
 import { CalendarPreferences } from '../src/components/CalendarPreferences';
+import { WidgetPreferences } from '../src/components/WidgetPreferences';
+import { PrivacyPreferences } from '../src/components/PrivacyPreferences';
+import { CapturePreferences } from '../src/components/CapturePreferences';
 import { useCalendarStore } from '../src/stores/useCalendarStore';
 import { useTheme, type DesignPreset } from '../src/hooks/useTheme';
-import { sendTestNotification } from '../src/services/notifications';
+import { sendBriefingPreview } from '../src/services/briefingLifecycle';
+import { useBriefingStatus } from '../src/stores/useBriefingStatus';
 
 const DESIGN_PRESETS: { id: DesignPreset; name: string; desc: string }[] = [
   {
@@ -60,6 +64,7 @@ const DESIGN_PRESETS: { id: DesignPreset; name: string; desc: string }[] = [
 ];
 
 export default function SettingsScreen() {
+  const briefingStatus = useBriefingStatus();
   const router = useRouter();
   const theme = useTheme();
   const { isConnected } = useNetworkStatus();
@@ -198,7 +203,7 @@ export default function SettingsScreen() {
   };
 
   const handleTestNotification = async () => {
-    const ok = await sendTestNotification();
+    const ok = await sendBriefingPreview().catch(() => false);
     if (ok) {
       Alert.alert(
         'Test-Mitteilung geplant',
@@ -207,7 +212,7 @@ export default function SettingsScreen() {
     } else {
       Alert.alert(
         'Berechtigung fehlt',
-        'Bitte erlaube Mitteilungen für Expo Go in den iOS-Einstellungen.'
+        'Bitte erlaube Mitteilungen für diese App unter iPhone-Einstellungen → Mitteilungen. Aktiviere dort auch „Sperrbildschirm“.'
       );
     }
   };
@@ -371,6 +376,10 @@ export default function SettingsScreen() {
         </TouchableOpacity>
       </View>
 
+      <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>SICHERN & SCANNEN</Text>
+        {([{ title: 'Backups & Wiederherstellen', subtitle: 'Automatisch zu Hause aufs NAS sichern', route: '/backups', icon: 'save-outline' }, { title: 'Dokument scannen', subtitle: 'Mehrseitige PDF aufnehmen und hochladen', route: '/scan', icon: 'scan-outline' }] as const).map(item => <TouchableOpacity key={item.route} accessibilityRole="button" onPress={() => router.push(item.route)} style={[styles.row, { backgroundColor: theme.cardBg, borderColor: theme.border }]}><View style={styles.rowLeft}><Ionicons name={item.icon} size={22} color={theme.accent} /><View style={{ flex: 1 }}><Text style={[styles.rowTitle, { color: theme.text }]}>{item.title}</Text><Text style={[styles.rowSubtitle, { color: theme.subtext }]}>{item.subtitle}</Text></View></View><Ionicons name="chevron-forward" size={20} color={theme.subtext} /></TouchableOpacity>)}
+      </View>
       {/* Board Layout & Appearance */}
       <View style={styles.section}>
         <Text style={[styles.sectionTitle, { color: theme.subtext }]}>
@@ -778,10 +787,10 @@ export default function SettingsScreen() {
             <Ionicons name="notifications-outline" size={22} color="#FF3B30" />
             <View style={{ flex: 1 }}>
               <Text style={[styles.rowTitle, { color: theme.text }]}>
-                Tägliches Morgen-Briefing (08:30 Uhr)
+                Täglicher Überblick (08:30 Uhr)
               </Text>
               <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
-                Zeigt dir morgens die Anzahl deiner offenen Aufgaben
+                Offene Aufgaben und Termine deiner ausgewählten Kalender. Für 14 Tage vorgeplant und bei App-Nutzung aktualisiert.
               </Text>
             </View>
           </View>
@@ -791,6 +800,8 @@ export default function SettingsScreen() {
             trackColor={{ false: '#D1D1D6', true: '#34C759' }}
           />
         </View>
+
+        <Text accessibilityRole={briefingStatus.error ? 'alert' : undefined} style={{ color: theme.subtext, fontSize: 12, lineHeight: 19, marginBottom: 12 }}>{briefingStatus.message}</Text>
 
         <TouchableOpacity
           style={[
@@ -803,7 +814,7 @@ export default function SettingsScreen() {
             <Ionicons name="paper-plane-outline" size={22} color={theme.accent} />
             <View>
               <Text style={[styles.rowTitle, { color: theme.text }]}>
-                Test-Mitteilung an dieses iPhone senden
+                Tagesübersicht als Test senden
               </Text>
               <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
                 Prüft, ob Banner & Ton sofort funktionieren
@@ -815,6 +826,13 @@ export default function SettingsScreen() {
       </View>
 
       <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>SCHNELLERFASSUNG & SIRI</Text>
+        <CapturePreferences />
+        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>DATENSCHUTZ & APP-SPERRE</Text>
+        <PrivacyPreferences />
+        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>WIDGETS</Text>
+        <WidgetPreferences />
+
         <Text style={[styles.sectionTitle, { color: theme.subtext }]}>BEDIENUNG</Text>
         {/* Task Completion Tip */}
         <View

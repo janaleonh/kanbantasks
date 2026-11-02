@@ -182,6 +182,8 @@ export function TaskCard({
                 {task.title}
               </Text>
             </View>
+            {(task.project || task.tags?.length) ? <Text numberOfLines={1} style={{ color: theme.accent, fontSize: 11, marginTop: 5 }}>{[task.project, ...(task.tags || []).map(tag => `#${tag}`)].filter(Boolean).join(' · ')}</Text> : null}
+            {(task.recurrence || task.checklist?.length || task.attachments?.length) ? <Text style={{ color: theme.subtext, fontSize: 11, marginTop: 5 }}>{[task.recurrence ? '↻ Wiederholt sich' : '', task.checklist?.length ? `${task.checklist.filter(item => item.done).length}/${task.checklist.length} Schritte` : '', task.attachments?.length ? `📎 ${task.attachments.length}` : ''].filter(Boolean).join(' · ')}</Text> : null}
 
             {task.notes ? (
               <Text

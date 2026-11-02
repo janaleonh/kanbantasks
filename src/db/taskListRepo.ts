@@ -1,5 +1,6 @@
 import { getDatabase } from './database';
 import { generateUUID } from '../utils/uuid';
+import { announceHistory, recordListDeletion } from './history';
 
 export const COLUMN_PALETTE = [
   '#007AFF', // Blue
@@ -122,14 +123,22 @@ export async function setTaskListColor(id: string, color: string): Promise<void>
 export async function deleteTaskList(id: string): Promise<void> {
   const db = await getDatabase();
   const now = new Date().toISOString();
-  await db.runAsync(
+  let history: string | null = null;
+  await db.withExclusiveTransactionAsync(async transaction => {
+  const list = await transaction.getFirstAsync<Record<string, any>>('SELECT * FROM task_lists WHERE id = ? AND deletedLocally = 0', [id]);
+  if (!list) return;
+  const tasks = await transaction.getAllAsync<Record<string, any>>('SELECT * FROM tasks WHERE listId = ? AND deletedLocally = 0', [id]);
+  history = await recordListDeletion(transaction, list, tasks);
+  await transaction.runAsync(
     'UPDATE task_lists SET deletedLocally = 1, updatedAt = ?, syncStatus = ? WHERE id = ?',
     [now, 'pending', id]
   );
-  await db.runAsync(
+  await transaction.runAsync(
     'UPDATE tasks SET deletedLocally = 1, updatedAt = ?, syncStatus = ? WHERE listId = ?',
     [now, 'pending', id]
   );
+  });
+  announceHistory(history, 'Liste gelöscht');
 }
 
 export async function reorderTaskLists(orderedIds: string[]): Promise<void> {

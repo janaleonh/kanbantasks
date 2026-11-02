@@ -102,7 +102,7 @@ export default function DocumentsScreen() {
     </>}
   </View>;
   return <View style={{ flex: 1, backgroundColor: theme.background }}>
-    <Stack.Screen options={{ headerTitle: 'Dokumente', headerRight: () => <TouchableOpacity accessibilityRole="button" accessibilityLabel="NAS-Einstellungen" onPress={() => router.push('/nas-settings')} style={{ padding: 10 }}><Ionicons name="settings-outline" color={theme.accent} size={23} /></TouchableOpacity> }} />
+    <Stack.Screen options={{ headerTitle: 'Dokumente', headerRight: () => <View style={{ flexDirection: 'row' }}><TouchableOpacity accessibilityRole="button" accessibilityLabel="Dokument scannen" onPress={() => router.push('/scan')} style={{ padding: 10 }}><Ionicons name="scan-outline" color={theme.accent} size={23} /></TouchableOpacity><TouchableOpacity accessibilityRole="button" accessibilityLabel="NAS-Einstellungen" onPress={() => router.push('/nas-settings')} style={{ padding: 10 }}><Ionicons name="settings-outline" color={theme.accent} size={23} /></TouchableOpacity></View> }} />
     {!initialized ? <ActivityIndicator style={{ margin: 32 }} color={theme.accent} /> : !config ? <View style={styles.empty}>
       <Ionicons name="folder-open-outline" size={46} color={theme.accent} />
       <Text style={[styles.emptyTitle, { color: theme.text, fontFamily: theme.headingFont }]}>Wichtige Dokumente immer dabei.</Text>

@@ -1,9 +1,19 @@
 import { getDatabase } from './database';
 import { generateUUID } from '../utils/uuid';
+import type { SQLiteDatabase } from 'expo-sqlite';
+import { nextOccurrence, parseDetails, validateDetails, type TaskDetails } from '../tasks/details';
+import { recordTaskHistory, announceHistory } from './history';
+
+let taskTransactions: Promise<void> = Promise.resolve();
+function taskTransaction(db: SQLiteDatabase, work: (transaction: SQLiteDatabase) => Promise<void>) {
+  const next = taskTransactions.catch(() => {}).then(() => db.withExclusiveTransactionAsync(work));
+  taskTransactions = next;
+  return next;
+}
 
 export type TaskPriority = 'none' | 'low' | 'medium' | 'high';
 
-export interface Task {
+export interface Task extends TaskDetails {
   id: string;
   remoteId: string | null;
   listId: string;
@@ -22,6 +32,11 @@ export interface Task {
 }
 
 interface TaskRow {
+  project?: string | null;
+  tags?: string | null;
+  recurrence?: string | null;
+  checklist?: string | null;
+  attachments?: string | null;
   id: string;
   remoteId: string | null;
   listId: string;
@@ -40,8 +55,14 @@ interface TaskRow {
 }
 
 function rowToTask(row: TaskRow): Task {
+  const details = parseDetails(row);
   return {
     ...row,
+    recurrence: details.recurrence ?? null,
+    checklist: details.checklist ?? [],
+    attachments: details.attachments ?? [],
+    project: details.project ?? null,
+    tags: details.tags ?? [],
     status: row.status as Task['status'],
     priority: (row.priority as TaskPriority) || 'none',
     reminderAt: row.reminderAt ?? null,
@@ -119,15 +140,34 @@ export async function createTask(
   };
 }
 
+export type TaskUpdates = Partial<Pick<Task, 'title' | 'notes' | 'status' | 'due' | 'priority' | 'reminderAt'>> & TaskDetails;
+
 export async function updateTask(
   id: string,
-  updates: Partial<Pick<Task, 'title' | 'notes' | 'status' | 'due' | 'priority' | 'reminderAt'>>
+  updates: TaskUpdates
 ): Promise<void> {
   const db = await getDatabase();
+  let pendingHistory: string | null = null;
+  await taskTransaction(db, async transaction => {
+    const before = await transaction.getFirstAsync<TaskRow>('SELECT * FROM tasks WHERE id = ?', [id]);
+    await updateTaskInTransaction(transaction, id, updates);
+    if (updates.status === 'completed') await createNextInTransaction(transaction, id);
+    const after = await transaction.getFirstAsync<TaskRow>('SELECT * FROM tasks WHERE id = ?', [id]);
+    const history = await recordTaskHistory(transaction, before, after, 'Aufgabe bearbeitet');
+    if (history) pendingHistory = history;
+  });
+  announceHistory(pendingHistory, 'Aufgabe bearbeitet');
+}
+
+async function updateTaskInTransaction(db: SQLiteDatabase, id: string, updates: TaskUpdates) {
   const now = new Date().toISOString();
 
   const setClauses: string[] = ['updatedAt = ?', "syncStatus = 'pending'"];
   const values: (string | null)[] = [now];
+  const details = validateDetails(updates);
+  for (const key of ['recurrence', 'checklist', 'attachments', 'project', 'tags'] as const) {
+    if (details[key] !== undefined) { setClauses.push(`${key} = ?`); values.push(details[key] === null ? null : key === 'project' ? details.project! : JSON.stringify(details[key])); }
+  }
 
   if (updates.title !== undefined) {
     setClauses.push('title = ?');
@@ -167,23 +207,27 @@ export async function moveTask(
   toPosition: number
 ): Promise<void> {
   const db = await getDatabase();
+  let history: string | null = null;
+  await taskTransaction(db, async transaction => {
+  const before = await transaction.getFirstAsync<TaskRow>('SELECT * FROM tasks WHERE id = ?', [taskId]);
   const now = new Date().toISOString();
 
-  const existing = await db.getFirstAsync<TaskRow>(
+  const existing = await transaction.getFirstAsync<TaskRow>(
     'SELECT * FROM tasks WHERE id = ?',
     [taskId]
   );
   if (!existing) return;
+  if (!await transaction.getFirstAsync('SELECT id FROM task_lists WHERE id = ? AND deletedLocally = 0', [toListId])) throw new Error('Die Zielliste ist nicht mehr vorhanden.');
 
   // Shift existing tasks in target list to make room (local order only, do not mark pending)
-  await db.runAsync(
+  await transaction.runAsync(
     'UPDATE tasks SET localPosition = localPosition + 1 WHERE listId = ? AND localPosition >= ? AND deletedLocally = 0',
     [toListId, toPosition]
   );
 
   // If moving within the same list, only update localPosition
   if (existing.listId === toListId) {
-    await db.runAsync(
+    await transaction.runAsync(
       'UPDATE tasks SET localPosition = ? WHERE id = ?',
       [toPosition, taskId]
     );
@@ -201,10 +245,14 @@ export async function moveTask(
     prevListId = null;
   }
 
-  await db.runAsync(
+  await transaction.runAsync(
     'UPDATE tasks SET listId = ?, previousListId = ?, localPosition = ?, updatedAt = ?, syncStatus = ? WHERE id = ?',
     [toListId, prevListId, toPosition, now, 'pending', taskId]
   );
+  const after = await transaction.getFirstAsync<TaskRow>('SELECT * FROM tasks WHERE id = ?', [taskId]);
+  history = await recordTaskHistory(transaction, before, after, 'Aufgabe verschoben');
+  });
+  announceHistory(history, 'Aufgabe verschoben');
 }
 
 export async function reorderTasksInList(listId: string, orderedTaskIds: string[]): Promise<void> {
@@ -220,22 +268,84 @@ export async function reorderTasksInList(listId: string, orderedTaskIds: string[
 export async function deleteTask(id: string): Promise<void> {
   const db = await getDatabase();
   const now = new Date().toISOString();
-  await db.runAsync(
+  let history: string | null = null;
+  await taskTransaction(db, async transaction => {
+  const before = await transaction.getFirstAsync<TaskRow>('SELECT * FROM tasks WHERE id = ?', [id]);
+  await transaction.runAsync(
     'UPDATE tasks SET deletedLocally = 1, updatedAt = ?, syncStatus = ? WHERE id = ?',
     [now, 'pending', id]
   );
+  history = await recordTaskHistory(transaction, before, await transaction.getFirstAsync<TaskRow>('SELECT * FROM tasks WHERE id = ?', [id]), 'Aufgabe gelöscht');
+  });
+  announceHistory(history, 'Aufgabe gelöscht');
 }
 
 export async function toggleTaskStatus(id: string): Promise<Task['status']> {
   const db = await getDatabase();
-  const task = await db.getFirstAsync<TaskRow>('SELECT * FROM tasks WHERE id = ?', [id]);
+  let newStatus: Task['status'] = 'needsAction';
+  let history: string | null = null;
+  await taskTransaction(db, async transaction => {
+  const task = await transaction.getFirstAsync<TaskRow>('SELECT * FROM tasks WHERE id = ?', [id]);
   if (!task) throw new Error(`Task ${id} not found`);
   
-  const newStatus = task.status === 'needsAction' ? 'completed' : 'needsAction';
-  const now = new Date().toISOString();
-  await db.runAsync(
-    'UPDATE tasks SET status = ?, updatedAt = ?, syncStatus = ? WHERE id = ?',
-    [newStatus, now, 'pending', id]
-  );
-  return newStatus as Task['status'];
+  newStatus = task.status === 'needsAction' ? 'completed' : 'needsAction';
+  await updateTaskInTransaction(transaction, id, { status: newStatus });
+  if (newStatus === 'completed') await createNextInTransaction(transaction, id);
+  history = await recordTaskHistory(transaction, task, await transaction.getFirstAsync<TaskRow>('SELECT * FROM tasks WHERE id = ?', [id]), 'Status geändert');
+  });
+  announceHistory(history, 'Status geändert');
+  return newStatus;
+}
+
+async function createNextInTransaction(db: SQLiteDatabase, id: string) {
+  const row = await db.getFirstAsync<TaskRow>('SELECT * FROM tasks WHERE id = ?', [id]);
+  if (!row || row.deletedLocally || row.status !== 'completed') return;
+  if (!await db.getFirstAsync('SELECT id FROM task_lists WHERE id = ? AND deletedLocally = 0', [row.listId])) return;
+  const task = rowToTask(row);
+  if (!task.recurrence) return;
+  if (await db.getFirstAsync('SELECT sourceId FROM task_repeat_receipts WHERE sourceId = ?', [id])) return;
+  const next = nextOccurrence(task.due, task.recurrence);
+  const reminder = task.reminderAt && task.due ? new Date(new Date(next.due).getTime() + new Date(task.reminderAt).getTime() - new Date(task.due).getTime()) : null;
+  const nextId = generateUUID();
+  await db.runAsync(`INSERT INTO tasks (id, listId, title, notes, status, priority, due, reminderAt, localPosition, updatedAt, syncStatus, deletedLocally, recurrence, checklist, attachments, repeatSourceId, project, tags)
+    VALUES (?, ?, ?, ?, 'needsAction', ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, ?)`, [
+    nextId, task.listId, task.title, task.notes, task.priority, next.due,
+    reminder && Number.isFinite(reminder.getTime()) && reminder > new Date() ? reminder.toISOString() : null,
+    task.localPosition + 1, new Date().toISOString(), JSON.stringify(next.recurrence),
+    JSON.stringify((task.checklist || []).map(item => ({ ...item, done: false }))), JSON.stringify(task.attachments || []), id, task.project || null, JSON.stringify(task.tags || []),
+  ]);
+  await db.runAsync('INSERT INTO task_repeat_receipts (sourceId, nextTaskId) VALUES (?, ?)', [id, nextId]);
+  return true;
+}
+
+export async function materializeCompletedRepeats() {
+  const db = await getDatabase();
+  let created = 0;
+  await taskTransaction(db, async transaction => {
+    const rows = await transaction.getAllAsync<{ id: string }>(`SELECT id FROM tasks WHERE status = 'completed' AND deletedLocally = 0 AND recurrence IS NOT NULL
+      AND id NOT IN (SELECT sourceId FROM task_repeat_receipts)`);
+    for (const row of rows) if (await createNextInTransaction(transaction, row.id)) created++;
+  });
+  return created;
+}
+
+export async function captureTask(title: string, notes: string, listId: string | null, receiptId: string) {
+  if (!title.trim() || title.length > 1000 || notes.length > 20000 || !receiptId || receiptId.length > 200) throw new Error('Bitte gib einen gültigen Aufgabentitel ein.');
+  const db = await getDatabase();
+  let taskId = '';
+  await taskTransaction(db, async transaction => {
+    const receipt = await transaction.getFirstAsync<{ taskId: string }>('SELECT taskId FROM capture_receipts WHERE id = ?', [receiptId]);
+    if (receipt) { taskId = receipt.taskId; return; }
+    let target = listId ? await transaction.getFirstAsync<{ id: string }>('SELECT id FROM task_lists WHERE id = ? AND deletedLocally = 0', [listId]) : await transaction.getFirstAsync<{ id: string }>('SELECT id FROM task_lists WHERE deletedLocally = 0 AND isVisible = 1 ORDER BY position ASC LIMIT 1');
+    const now = new Date().toISOString();
+    if (listId && !target) throw new Error('Die gewählte Liste ist nicht mehr verfügbar.');
+    if (!target) {
+      target = { id: generateUUID() };
+      await transaction.runAsync("INSERT INTO task_lists (id, title, position, isVisible, updatedAt, syncStatus, deletedLocally) VALUES (?, 'Eingang', 0, 1, ?, 'pending', 0)", [target.id, now]);
+    }
+    taskId = generateUUID();
+    await transaction.runAsync("INSERT INTO tasks (id, listId, title, notes, status, priority, localPosition, updatedAt, syncStatus, deletedLocally) VALUES (?, ?, ?, ?, 'needsAction', 'none', 0, ?, 'pending', 0)", [taskId, target.id, title.trim(), notes, now]);
+    await transaction.runAsync('INSERT INTO capture_receipts (id, taskId) VALUES (?, ?)', [receiptId, taskId]);
+  });
+  return taskId;
 }

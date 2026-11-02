@@ -14,6 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import { KanbanBoard } from '../src/components/KanbanBoard';
+import { UndoBanner } from '../src/components/UndoBanner';
 import { EditTaskModal } from '../src/components/EditTaskModal';
 import { SyncStatusBadge } from '../src/components/SyncStatusBadge';
 import { LiquidGlassBackground } from '../src/components/LiquidGlassBackground';
@@ -178,7 +179,7 @@ export default function HomeScreen() {
         >
       >
     ) => {
-      updateTask(id, updates);
+      return updateTask(id, updates);
     },
     [updateTask]
   );
@@ -266,6 +267,9 @@ export default function HomeScreen() {
                 style={StyleSheet.absoluteFill}
               />
             )}
+            <TouchableOpacity accessibilityRole="button" accessibilityLabel="Aufgabe schnell erfassen" onPress={() => router.push('/capture')} style={styles.iconPillBtn}>
+              <Ionicons name="add-circle-outline" size={22} color={theme.accent} />
+            </TouchableOpacity>
             <TouchableOpacity
               onPress={toggleLayout}
               style={styles.iconPillBtn}
@@ -355,6 +359,10 @@ export default function HomeScreen() {
         })}
       </View>
 
+      <View style={{ flexDirection: 'row', paddingHorizontal: 16, gap: 6, marginBottom: 8 }}>
+        {([{ title: 'Suche', route: '/search' }, { title: 'Projekte', route: '/projects' }, { title: 'Verlauf', route: '/history' }, { title: 'Fokus', route: '/focus' }] as const).map(item => <TouchableOpacity key={item.route} accessibilityRole="button" onPress={() => router.push(item.route)} style={{ flex: 1, paddingVertical: 9, borderRadius: 12, backgroundColor: theme.pillBg, alignItems: 'center' }}><Text style={{ color: theme.text, fontSize: 13, fontWeight: '600' }}>{item.title}</Text></TouchableOpacity>)}
+      </View>
+      <UndoBanner />
       {/* Search Bar */}
       {showSearchBar && (
         <View style={styles.searchContainer}>

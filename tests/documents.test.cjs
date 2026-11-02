@@ -21,6 +21,18 @@ const xmlEscape = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').
 const responseXML = (item) => `<D:response><D:href>${xmlEscape(paths.remoteUrl(config, item.path, item.directory))}</D:href><D:propstat><D:prop><D:resourcetype>${item.directory ? '<D:collection/>' : ''}</D:resourcetype><D:getcontentlength>${item.size ?? ''}</D:getcontentlength><D:getcontenttype>${item.mimeType}</D:getcontenttype><D:getetag>${xmlEscape(item.etag || '')}</D:getetag><D:getlastmodified>Sun, 01 Nov 2026 10:00:00 GMT</D:getlastmodified></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>`;
 const multistatus = (items) => `<?xml version="1.0"?><D:multistatus xmlns:D="DAV:">${items.map(responseXML).join('')}</D:multistatus>`;
 
+test('backup directory creation requires a new collection or verifies an existing directory', async () => {
+  const calls = [];
+  const created = new WebDavClient(config, 'test', async (url, options) => { calls.push({ url, options }); return new Response(null, { status: 201 }); });
+  await created.ensureDirectory('Planner-Backups', new AbortController().signal);
+  assert.equal(calls[0].options.method, 'MKCOL');
+  assert.equal(calls[0].options.redirect, 'error');
+  assert.ok(calls[0].url.endsWith('/Planner-Backups/'));
+  const existing = directory => new WebDavClient(config, 'test', async (_, options) => options.method === 'MKCOL' ? new Response(null, { status: 405 }) : new Response(multistatus([entry('Planner-Backups', { directory })]), { status: 207 }));
+  await existing(true).ensureDirectory('Planner-Backups', new AbortController().signal);
+  await assert.rejects(existing(false).ensureDirectory('Planner-Backups', new AbortController().signal));
+});
+
 test('NAS configuration accepts HTTPS and bounded home networks, never embedded credentials or traversal', () => {
   assert.equal(paths.normalizeInput({ ...config, root: '/home//Drive/Wichtig/', homeNetwork: '192.168.178.25/24' }).homeNetwork, '192.168.178.0/24');
   assert.equal(paths.normalizeInput({ ...config }).root, config.root);
@@ -216,6 +228,20 @@ test('a confirmed upload refreshes its folder, leaving offline favorites intact'
   assert.deepEqual(fixture.requests.map(({ request }) => request.method), ['PUT', 'PROPFIND']);
   assert.equal(fixture.store.getState().manifest.offline['a.pdf'].fileKey, 'old');
   assert.equal(fixture.store.getState().uploading, false);
+});
+
+test('backup uploads and reads remain bound to the home network, configured NAS and fixed backup folder', async () => {
+  const fixture = storeFixture(manifest(), { home: false });
+  await fixture.store.getState().initialize();
+  const source = { name: 'Planner-backup-test.json', size: 2, body: new Blob(['{}']) };
+  await assert.rejects(fixture.store.getState().uploadBackup(source, config.id));
+  await assert.rejects(fixture.store.getState().readBackup('Planner-Backups/Planner-backup-test.json', config.id));
+  await assert.rejects(fixture.store.getState().uploadBackup(source, 'different'), /geändert/);
+  assert.equal(fixture.requests.length, 0);
+  fixture.setHome(true);
+  await assert.rejects(fixture.store.getState().readBackup('../secret.json', config.id), /Ungültige/);
+  await assert.rejects(fixture.store.getState().uploadBackup({ ...source, name: '../secret.json' }, config.id));
+  assert.equal(fixture.requests.length, 0);
 });
 
 test('disconnect aborts uploads and late replies cannot restore removed state', async () => {

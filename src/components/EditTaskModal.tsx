@@ -19,6 +19,14 @@ import { Ionicons } from '@expo/vector-icons';
 import type { Task, TaskPriority } from '../db/taskRepo';
 import type { TaskList } from '../db/taskListRepo';
 import { useTheme } from '../hooks/useTheme';
+import { useRouter } from 'expo-router';
+import { TaskDetailsEditor } from './TaskDetailsEditor';
+import type { TaskUpdates } from '../db/taskRepo';
+import { getTaskById } from '../db/taskRepo';
+import type { ChecklistItem, RepeatRule, TaskAttachment } from '../tasks/details';
+import { validateDetails } from '../tasks/details';
+import { useDocumentStore } from '../stores/useDocumentStore';
+import DateTimePicker from '@react-native-community/datetimepicker';
 
 interface EditTaskModalProps {
   task: Task | null;
@@ -27,16 +35,14 @@ interface EditTaskModalProps {
   onClose: () => void;
   onSave: (
     id: string,
-    updates: Partial<
-      Pick<Task, 'title' | 'notes' | 'status' | 'due' | 'priority' | 'reminderAt'>
-    >
-  ) => void;
+    updates: TaskUpdates
+  ) => void | Promise<void>;
   onMoveTask: (
     taskId: string,
     fromListId: string,
     toListId: string,
     toIndex: number
-  ) => void;
+  ) => void | Promise<void>;
   onDelete: (id: string) => void;
 }
 
@@ -57,6 +63,15 @@ export function EditTaskModal({
   onDelete,
 }: EditTaskModalProps) {
   const theme = useTheme();
+  const router = useRouter();
+  const [recurrence, setRecurrence] = useState<RepeatRule | null>(null);
+  const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
+  const [attachments, setAttachments] = useState<TaskAttachment[]>([]);
+  const [project, setProject] = useState('');
+  const [tags, setTags] = useState('');
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const [showDuePicker, setShowDuePicker] = useState(false);
   const [title, setTitle] = useState('');
   const [notes, setNotes] = useState('');
   const [status, setStatus] = useState<'needsAction' | 'completed'>('needsAction');
@@ -77,6 +92,12 @@ export function EditTaskModal({
       setPriority(task.priority || 'none');
       setReminderAt(task.reminderAt ?? null);
       setSelectedListId(task.listId);
+      setRecurrence(task.recurrence ?? null);
+      setChecklist(task.checklist || []);
+      setAttachments(task.attachments || []);
+      setProject(task.project || '');
+      setTags((task.tags || []).join(', '));
+      setShowDuePicker(false);
     }
   }, [task]);
 
@@ -113,21 +134,33 @@ export function EditTaskModal({
     setReminderAt(d.toISOString());
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    if (savingRef.current) return false;
     if (title.trim()) {
-      onSave(task.id, {
+      setSaving(true);
+      savingRef.current = true;
+      try {
+      const labels = validateDetails({ project, tags: tags.split(',').map(tag => tag.trim()).filter(Boolean) });
+      validateDetails({ recurrence, checklist, attachments });
+      if (selectedListId && selectedListId !== task.listId) {
+        await onMoveTask(task.id, task.listId, selectedListId, 0);
+        if ((await getTaskById(task.id))?.listId !== selectedListId) throw new Error('Die Aufgabe konnte nicht in die gewählte Liste verschoben werden.');
+      }
+      await onSave(task.id, {
         title: title.trim(),
         notes: notes.trim(),
         status,
         due,
         priority,
         reminderAt,
+        recurrence: recurrence && due !== task.due ? { frequency: recurrence.frequency, interval: recurrence.interval } : recurrence, checklist, attachments, ...labels,
       });
-      if (selectedListId && selectedListId !== task.listId) {
-        onMoveTask(task.id, task.listId, selectedListId, 0);
-      }
       onClose();
+      return true;
+      } catch (err) { Alert.alert('Aufgabe nicht gespeichert', err instanceof Error ? err.message : 'Bitte versuche es erneut.'); return false; }
+      finally { savingRef.current = false; setSaving(false); }
     }
+    return false;
   };
 
   const handleDelete = () => {
@@ -266,6 +299,11 @@ export function EditTaskModal({
           </View>
 
           {/* List Selection */}
+          <View style={styles.field}>
+            <Text style={[styles.label, { color: theme.subtext }]}>PROJEKT & TAGS</Text>
+            <TextInput accessibilityLabel="Projekt" value={project} onChangeText={setProject} maxLength={80} placeholder="Projekt, z. B. Renovierung" placeholderTextColor={theme.subtext} style={[styles.notesInput, { color: theme.text, backgroundColor: theme.cardBg, minHeight: 45, borderRadius: 12, marginBottom: 8 }]} />
+            <TextInput accessibilityLabel="Tags, durch Komma getrennt" value={tags} onChangeText={setTags} placeholder="Tags: privat, wichtig" placeholderTextColor={theme.subtext} style={[styles.notesInput, { color: theme.text, backgroundColor: theme.cardBg, minHeight: 45, borderRadius: 12 }]} />
+          </View>
           <View style={styles.field}>
             <Text style={[styles.label, { color: theme.subtext }]}>LISTE</Text>
             <ScrollView
@@ -450,6 +488,7 @@ export function EditTaskModal({
           </View>
 
           {/* Due Date Quick Picker */}
+          {showDuePicker && <DateTimePicker mode="date" display={Platform.OS === 'ios' ? 'inline' : 'default'} value={due ? new Date(due) : new Date()} onChange={(event, date) => { if (Platform.OS !== 'ios' || event.type === 'dismissed') setShowDuePicker(false); if (date) { date.setHours(12, 0, 0, 0); setDue(date.toISOString()); } }} />}
           <View style={styles.field}>
             <Text style={[styles.label, { color: theme.subtext }]}>
               FÄLLIGKEITSDATUM{' '}
@@ -493,6 +532,7 @@ export function EditTaskModal({
                   +7 Tage
                 </Text>
               </TouchableOpacity>
+              <TouchableOpacity accessibilityRole="button" onPress={() => setShowDuePicker(value => !value)} style={[styles.chip, { backgroundColor: theme.cardBg }]}><Ionicons name="calendar-number-outline" size={15} color={theme.accent} /><Text style={[styles.chipText, { color: theme.text }]}>Datum wählen</Text></TouchableOpacity>
               {due ? (
                 <TouchableOpacity
                   style={[styles.chip, { backgroundColor: theme.cardBg }]}
@@ -507,6 +547,11 @@ export function EditTaskModal({
             </View>
           </View>
 
+          <TaskDetailsEditor recurrence={recurrence} checklist={checklist} attachments={attachments} onRecurrence={setRecurrence} onChecklist={setChecklist} onAttachments={setAttachments} onOpenAttachment={attachment => {
+            if (useDocumentStore.getState().config?.id !== attachment.configId) { Alert.alert('Andere NAS-Verbindung', 'Dieses Dokument gehört zu einer anderen NAS-Verbindung. Verbinde zuerst das zugehörige NAS.'); return; }
+            void handleSave().then(saved => { if (saved) router.push({ pathname: '/document', params: { path: attachment.path, taskId: task.id } }); });
+          }} />
+          {status === 'needsAction' && <TouchableOpacity accessibilityRole="button" disabled={saving} onPress={() => { void handleSave().then(saved => { if (saved) router.push({ pathname: '/focus', params: { taskId: task.id } }); }); }} style={{ padding: 14, borderRadius: 12, backgroundColor: theme.pillBg, marginTop: 12 }}><Text style={{ color: theme.accent, fontWeight: '700', textAlign: 'center' }}>Mit dieser Aufgabe fokussieren</Text></TouchableOpacity>}
         </ScrollView>
 
         {/* Bottom Thumb-Zone Action Bar */}

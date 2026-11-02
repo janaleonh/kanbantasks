@@ -1,5 +1,10 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
+import { notificationText } from '../security/privacy';
+import { getTaskById } from '../db/taskRepo';
+import { requestNotificationPermissions } from './notificationPermissions';
+import { BRIEFING_PREFIX } from './briefing';
+export { requestNotificationPermissions } from './notificationPermissions';
 
 // Configure foreground notification presentation on iOS
 Notifications.setNotificationHandler({
@@ -11,28 +16,6 @@ Notifications.setNotificationHandler({
     shouldShowList: true,
   }),
 });
-
-export async function requestNotificationPermissions(): Promise<boolean> {
-  try {
-    const { status: existingStatus } = await Notifications.getPermissionsAsync();
-    let finalStatus = existingStatus;
-
-    if (existingStatus !== 'granted') {
-      const { status } = await Notifications.requestPermissionsAsync({
-        ios: {
-          allowAlert: true,
-          allowBadge: true,
-          allowSound: true,
-        },
-      });
-      finalStatus = status;
-    }
-
-    return finalStatus === 'granted';
-  } catch {
-    return false;
-  }
-}
 
 export async function scheduleTaskReminder(
   taskId: string,
@@ -55,8 +38,7 @@ export async function scheduleTaskReminder(
     const id = await Notifications.scheduleNotificationAsync({
       identifier: `task-${taskId}`,
       content: {
-        title: listTitle || 'Aufgabe fällig',
-        body: taskTitle,
+        ...await notificationText(listTitle || 'Aufgabe fällig', taskTitle),
         sound: 'default',
         data: { taskId },
       },
@@ -91,8 +73,8 @@ export async function scheduleFocusTimerNotification(
     await Notifications.scheduleNotificationAsync({
       identifier: 'focus-timer',
       content: {
-        title: 'Fokus-Session abgeschlossen',
-        body: `"${taskTitle}" – Zeit für eine kurze Pause.`,
+        data: { plannerExpiresAt: Date.now() + Math.max(1, durationSeconds) * 1000 },
+        ...await notificationText('Fokus-Session abgeschlossen', `"${taskTitle}" – Zeit für eine kurze Pause.`),
         sound: 'default',
       },
       trigger: {
@@ -113,36 +95,32 @@ export async function cancelFocusTimerNotification(): Promise<void> {
   }
 }
 
-export async function updateDailyBriefingNotification(
-  enabled: boolean,
-  openTaskCount: number
-): Promise<void> {
-  try {
-    await Notifications.cancelScheduledNotificationAsync('daily-briefing');
-    if (!enabled) return;
-
-    const granted = await requestNotificationPermissions();
-    if (!granted) return;
-
-    await Notifications.scheduleNotificationAsync({
-      identifier: 'daily-briefing',
-      content: {
-        title: 'Tagesüberblick',
-        body:
-          openTaskCount > 0
-            ? `Du hast aktuell ${openTaskCount} offene Aufgaben in deinem Board.`
-            : 'Dein Board ist aufgeräumt – starte entspannt in den Tag.',
-        sound: 'default',
-      },
-      trigger: {
-        type: Notifications.SchedulableTriggerInputTypes.DAILY,
-        hour: 8,
-        minute: 30,
-      },
-    });
-  } catch {
-    // Ignore
+export async function redactExistingNotifications() {
+  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+  for (const request of scheduled) {
+    if (request.identifier === 'briefing-preview') { await Notifications.cancelScheduledNotificationAsync(request.identifier); continue; }
+    if (!request.identifier.startsWith('task-') && !request.identifier.startsWith(BRIEFING_PREFIX) && !['focus-timer', 'daily-briefing'].includes(request.identifier)) continue;
+    let trigger: Notifications.NotificationTriggerInput;
+    if (request.identifier.startsWith('task-')) {
+      const task = await getTaskById(request.identifier.slice(5));
+      if (!task?.reminderAt || task.deletedLocally || task.status === 'completed' || !Number.isFinite(new Date(task.reminderAt).getTime()) || new Date(task.reminderAt) <= new Date()) { await Notifications.cancelScheduledNotificationAsync(request.identifier); continue; }
+      trigger = { type: Notifications.SchedulableTriggerInputTypes.DATE, date: new Date(task.reminderAt) };
+    } else if (request.identifier.startsWith(BRIEFING_PREFIX)) {
+      const day = request.identifier.slice(BRIEFING_PREFIX.length);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) { await Notifications.cancelScheduledNotificationAsync(request.identifier); continue; }
+      const [year, month, date] = day.split('-').map(Number);
+      const fire = new Date(year, month - 1, date, 8, 30);
+      if (fire <= new Date()) { await Notifications.cancelScheduledNotificationAsync(request.identifier); continue; }
+      trigger = { type: Notifications.SchedulableTriggerInputTypes.DATE, date: fire };
+    } else if (request.identifier === 'daily-briefing') trigger = { type: Notifications.SchedulableTriggerInputTypes.DAILY, hour: 8, minute: 30 };
+    else {
+      const end = Number(request.content.data?.plannerExpiresAt);
+      if (!Number.isFinite(end) || end <= Date.now()) { await Notifications.cancelScheduledNotificationAsync(request.identifier); continue; }
+      trigger = { type: Notifications.SchedulableTriggerInputTypes.DATE, date: new Date(end) };
+    }
+    await Notifications.scheduleNotificationAsync({ identifier: request.identifier, content: { ...await notificationText('', ''), sound: 'default', data: request.content.data }, trigger });
   }
+  await Notifications.dismissAllNotificationsAsync();
 }
 
 export async function sendTestNotification(): Promise<boolean> {
