@@ -163,6 +163,9 @@ Validierung: `node --test tests/calendar.test.cjs tests/widget-snapshot.test.cjs
 
 ### iPhone-Widgets
 
+Die neuen Aufgaben- und Datenschutzfunktionen sind in [FEATURES.md](FEATURES.md)
+mit Bedienung, Synchronisierungsgrenzen und nativen Voraussetzungen beschrieben.
+
 Die Widgets **Heute** (klein, mittel, groß sowie Sperrbildschirm) und
 **Aufgabenübersicht** (klein, mittel, groß) verwenden die Aufgaben der sichtbaren
 Listen. Tippen öffnet das gemeinsame Board. Daten werden nach dem
@@ -187,6 +190,20 @@ Widgetauswahl beim Anpassen des Sperrbildschirms öffnen.
 
 Die reine Datenaufbereitung lässt sich mit
 `node --test tests/widget-snapshot.test.cjs` prüfen.
+
+Unter **Einstellungen → Widgets** kann die Übergabe manuell gestartet werden.
+Der Status zeigt die bereitgestellten Anzahlen und erkennt einen fehlenden
+App-Group-Container sowie fehlgeschlagene native Schreibvorgänge. Ein erfolgreicher
+Schreibtest in der App bestätigt noch nicht den Zugriff der separat signierten
+Extension. Zeigt das Widget weiterhin „App zum Laden öffnen“, müssen beide
+Signaturen die konfigurierte App Group enthalten. Der unsignierte Workflow
+überschreibt `CODE_SIGN_ENTITLEMENTS` nicht mehr global mit einem leeren Wert;
+die anschließende Signierung muss die App-Group-Berechtigungen trotzdem erhalten.
+„Heute“ zeigt nur fällige/überfällige offene Aufgaben; undatierte Aufgaben stehen
+in der Aufgabenübersicht. Änderungen werden auch nach einem direkten Start in
+einen Unterbildschirm bereitgestellt. Ein leeres geladenes Board veröffentlicht
+ebenfalls einen gültigen Nullstand statt des Anfangsplatzhalters.
+Die Übergabe und Fehlerfälle sind in `tests/widget-sync.test.cjs` abgedeckt.
 
 Für die lokale Vorschau wird Node.js (LTS) benötigt:
 

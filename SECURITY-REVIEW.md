@@ -1,4 +1,4 @@
-# Sicherheitsprüfung vom 01.11.2026
+# Sicherheitsprüfung vom 01.11.2026, ergänzt am 02.11.2026
 
 Geprüft wurden der Quellcode von Anmeldung, Aufgaben-Synchronisierung,
 Kalenderverwaltung, SQLite-Speicherung, Widgets, Benachrichtigungen, NAS-Explorer,
@@ -46,9 +46,13 @@ wurden nicht durch einen Angriffstest untersucht.
   oder Uploads aus. Externe Kalenderlinks werden auf Google-HTTPS-Hosts begrenzt.
 - Aufgaben und NAS-Offlinekopien haben keine zusätzliche Datenbank-/Dateiverschlüsselung
   auf Anwendungsebene. Gerätesperre und OS-Schutz bleiben wesentlich. Es gibt
-  keine eigene Face-ID-/PIN-Sperre und keinen Schutz der App-Umschaltvorschau.
+  jetzt eine optionale Face-ID-/Touch-ID-Sperre mit Gerätecode-Alternative und
+  iOS-App-Switcher-Schutz. Sie schützt die Oberfläche, nicht die Datenbank mit
+  einem zusätzlichen Verschlüsselungsschlüssel. Details siehe [FEATURES.md](FEATURES.md).
 - Benachrichtigungen können Aufgaben- und Listentitel auf dem Sperrbildschirm
-  zeigen. Widgets enthalten ebenfalls Aufgabeninformationen. Abmeldung entfernt
+  zeigen, wenn die neue Option „Mitteilungstexte ausblenden“ nicht aktiv ist.
+  Bei aktiver Option werden auch geplante Mitteilungen neutralisiert. Widgets
+  enthalten weiterhin Aufgabeninformationen. Abmeldung entfernt
   diese lokalen Inhalte und Erinnerungen nicht automatisch.
 - Die IPA-Pipeline erstellt ein unsigniertes Release-Artefakt zum späteren
   Sideload-Signieren. Die Sicherheit der abschließenden Signierung und der
@@ -82,6 +86,32 @@ wurden nicht durch einen Angriffstest untersucht.
   kann eine Kopie bis zur Bereinigung des Betriebssystem-Caches zurückbleiben.
 - Offline-Dateien liegen im App-Dateisystem; keine zusätzliche Verschlüsselung
   der Dokumente auf Anwendungsebene implementiert.
+
+## Neue Wiederherstellungs- und Scan-Funktionen
+
+Der lokale Verlauf speichert vorangegangene Aufgabenstände einschließlich Notizen
+in derselben SQLite-Datenbank. Wiederherstellungen laufen transaktional und sind
+gegenüber dem Google-Synchronisationslauf serialisiert. Neuere inhaltliche Änderungen
+führen zum Konflikt statt zum Überschreiben. Kopien erhalten neue IDs.
+
+NAS-Backups verwenden ausschließlich die konfigurierte HTTPS-Verbindung mit gültigem
+Zertifikat, Heimnetzprüfung vor jeder Anfrage und blockierten Weiterleitungen.
+Ein fester Unterordner, begrenzte Dateinamen, Create-only-PUT und 10-MB-Grenze
+verhindern unbeabsichtigtes Überschreiben und beliebige Sicherungspfade. Nach dem
+Upload erfolgt ein Rücklesen mit Prüfsummenvergleich. SHA-256 erkennt Beschädigungen;
+es ist keine digitale Signatur und schützt nicht gegen einen Angreifer mit
+Schreibzugriff auf Sicherung und Prüfsumme. Die JSON-Dateien sind auf dem NAS nicht
+zusätzlich verschlüsselt. Sie enthalten keine Zugangsdaten oder Dokumentdateien.
+Importe werden validiert, an das bekannte Google-Konto gebunden und als neue Listen
+eingefügt. Bestehende Aufgaben werden nicht ersetzt.
+
+Die Dokumentkamera liefert nur PDFs aus einem festen privaten Cache-Unterordner.
+JavaScript prüft Dateipfad, PDF-Kennung, Seitenzahl, Größe und Speicherbedarf.
+Erst nach Kopie und erfolgreichem SQLite-Eintrag wird die temporäre Datei entfernt.
+Lokale PDF-Vorschauen führen kein JavaScript aus und erhalten keine NAS-Zugangsdaten.
+Auch Scans sind lokal nicht zusätzlich auf Anwendungsebene verschlüsselt und
+werden von der vorhandenen App-Sperre geschützt. Die echte Kamera, PDF-Ausgabe und
+das native Swift-Modul müssen im signierten iOS-Build auf einem Gerät geprüft werden.
 
 ## Abhängigkeiten
 
