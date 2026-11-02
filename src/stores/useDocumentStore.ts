@@ -6,6 +6,7 @@ import * as storage from '../documents/storage';
 import { DavError, WebDavClient } from '../documents/webdav';
 import { emptyManifest, MAX_FILE_BYTES, MAX_OFFLINE_BYTES, MAX_SYNC_FILES, type DavEntry, type NasConfig, type NasInput, type NasManifest } from '../documents/types';
 import { uploadPath, validateUpload, type UploadSource } from '../documents/upload';
+import { MAX_BACKUP_BYTES } from '../backup/format';
 
 type Status = 'unconfigured' | 'waiting' | 'ready' | 'syncing' | 'error';
 interface DocumentState {
@@ -17,7 +18,11 @@ interface DocumentState {
   disconnect: () => Promise<void>;
   browse: (path: string) => Promise<void>;
   testConnection: () => Promise<void>;
+  getRemoteEntry: (path: string, expectedConfigId: string) => Promise<DavEntry>;
   uploadFile: (folder: string, source: UploadSource, expectedConfigId: string) => Promise<void>;
+  uploadBackup: (source: UploadSource, expectedConfigId: string) => Promise<void>;
+  listBackups: () => Promise<DavEntry[]>;
+  readBackup: (path: string, expectedConfigId: string) => Promise<string>;
   toggleFavorite: (entry: DavEntry) => Promise<void>;
   syncFavorites: () => Promise<void>;
   setHome: (home: boolean) => void;
@@ -120,6 +125,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     await session(async ({ client, signal, assert }) => { await client.list('', signal); assert(); });
     set({ status: 'ready', error: null });
   },
+  getRemoteEntry: async (path, expectedConfigId) => session(async ({ client, config, signal, assert }) => { if (config.id !== expectedConfigId) throw new Error('Die NAS-Verbindung wurde geändert. Bitte öffne die Aufgabe erneut.'); const entry = await client.stat(safeSegments(path).join('/'), signal); assert(); return entry; }),
 
   uploadFile: async (folder, source, expectedConfigId) => {
     if (get().uploading || get().saving || syncRequest) throw new Error('Bitte warte, bis die laufende Dokumentenaktion beendet ist.');
@@ -148,6 +154,36 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       throw error;
     } finally { if (version === revision) set({ uploading: false }); }
   },
+
+  uploadBackup: async (source, expectedConfigId) => {
+    if (get().uploading || get().saving || syncRequest) throw new Error('Bitte warte, bis die laufende NAS-Aktion beendet ist.');
+    if (get().config?.id !== expectedConfigId) throw new Error('Die NAS-Verbindung wurde geändert.');
+    validateUpload(source);
+    if (source.size > MAX_BACKUP_BYTES || !/^Planner-backup-[a-z0-9-]+\.json$/i.test(source.name)) throw new Error('Die Sicherungsdatei ist ungültig oder zu groß.');
+    const version = revision;
+    set({ uploading: true });
+    try {
+      await session(async ({ client, config, signal, assert }) => {
+        if (config.id !== expectedConfigId) throw new Error('Die NAS-Verbindung wurde geändert.');
+        await client.ensureDirectory('Planner-Backups', signal); assert();
+        await client.upload('Planner-Backups', source, signal); assert();
+      });
+    } finally { if (version === revision) set({ uploading: false }); }
+  },
+  listBackups: async () => session(async ({ client, signal, assert }) => {
+    try {
+      const entries = await client.list('Planner-Backups', signal); assert();
+      return entries.filter(entry => !entry.directory && /^Planner-backup-[a-z0-9-]+\.json$/i.test(entry.name)).sort((a, b) => b.name.localeCompare(a.name)).slice(0, 200);
+    } catch (error) { if (error instanceof DavError && error.status === 404) return []; throw error; }
+  }),
+  readBackup: async (path, expectedConfigId) => session(async ({ client, config, signal, assert }) => {
+    if (config.id !== expectedConfigId || !/^Planner-Backups\/Planner-backup-[a-z0-9-]+\.json$/i.test(path)) throw new Error('Ungültige Sicherungsdatei oder geänderte NAS-Verbindung.');
+    const entry = await client.stat(path, signal); assert();
+    let text = '';
+    const decoder = new TextDecoder();
+    await client.download(entry, new WritableStream<Uint8Array>({ write: chunk => { text += decoder.decode(chunk, { stream: true }); } }), signal, MAX_BACKUP_BYTES);
+    assert(); return text + decoder.decode();
+  }),
 
   toggleFavorite: async (entry) => {
     const config = get().config;

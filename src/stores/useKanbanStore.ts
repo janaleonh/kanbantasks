@@ -10,7 +10,6 @@ import { getValidAccessToken } from '../auth/googleAuth';
 import {
   scheduleTaskReminder,
   cancelTaskReminder,
-  updateDailyBriefingNotification,
 } from '../services/notifications';
 import * as Haptics from 'expo-haptics';
 
@@ -22,6 +21,7 @@ interface KanbanState {
   taskLists: TaskList[];
   tasksByList: Record<string, Task[]>;
   isLoading: boolean;
+  hasLoaded: boolean;
   syncState: SyncStatus;
   lastSyncedAt: string | null;
   error: string | null;
@@ -63,9 +63,7 @@ interface KanbanState {
   ) => Promise<void>;
   updateTask: (
     id: string,
-    updates: Partial<
-      Pick<Task, 'title' | 'notes' | 'status' | 'due' | 'priority' | 'reminderAt'>
-    >
+    updates: taskRepo.TaskUpdates
   ) => Promise<void>;
   removeTask: (id: string) => Promise<void>;
   toggleTask: (id: string) => Promise<void>;
@@ -95,6 +93,7 @@ export const useKanbanStore = create<KanbanState>((set, get) => ({
   taskLists: [],
   tasksByList: {},
   isLoading: false,
+  hasLoaded: false,
   syncState: 'idle',
   lastSyncedAt: null,
   error: null,
@@ -155,6 +154,7 @@ export const useKanbanStore = create<KanbanState>((set, get) => ({
   loadAll: async () => {
     set({ isLoading: get().taskLists.length === 0, error: null });
     try {
+      const repeated = await taskRepo.materializeCompletedRepeats();
       const [
         showCompStr,
         themeStr,
@@ -185,11 +185,9 @@ export const useKanbanStore = create<KanbanState>((set, get) => ({
 
       const lists = await taskListRepo.getAllTaskLists();
       const tasksByList: Record<string, Task[]> = {};
-      let openCount = 0;
       for (const list of lists) {
         const listTasks = await taskRepo.getTasksByListId(list.id);
         tasksByList[list.id] = listTasks;
-        openCount += listTasks.filter((t) => t.status === 'needsAction').length;
       }
 
       const briefingEnabled = briefingStr === 'true';
@@ -207,9 +205,14 @@ export const useKanbanStore = create<KanbanState>((set, get) => ({
         autoSyncDelaySeconds: Number.isFinite(parsedDelay) ? parsedDelay : 60,
         columnWidth: parsedColWidth,
         isLoading: false,
+        hasLoaded: true,
       });
 
-      updateDailyBriefingNotification(briefingEnabled, openCount).catch(() => {});
+      for (const list of lists) for (const task of tasksByList[list.id]) {
+        if (task.status === 'needsAction' && task.reminderAt && new Date(task.reminderAt) > new Date()) void scheduleTaskReminder(task.id, task.title, list.title, new Date(task.reminderAt));
+        else if (task.status === 'completed' && task.reminderAt) void cancelTaskReminder(task.id);
+      }
+      if (repeated > 0) get().scheduleSync();
     } catch (error) {
       set({ error: (error as Error).message, isLoading: false });
     }
@@ -406,6 +409,7 @@ export const useKanbanStore = create<KanbanState>((set, get) => ({
   updateTask: async (id: string, updates) => {
     try {
       await taskRepo.updateTask(id, updates);
+      await get().loadAll();
 
       let updatedTaskObj: Task | null = null;
       let listTitle = 'Erinnerung';
@@ -433,7 +437,7 @@ export const useKanbanStore = create<KanbanState>((set, get) => ({
 
       if (updates.reminderAt !== undefined && updatedTaskObj) {
         const t = updatedTaskObj as Task;
-        if (updates.reminderAt) {
+        if (updates.reminderAt && t.status !== 'completed') {
           await scheduleTaskReminder(
             t.id,
             t.title,
@@ -448,6 +452,7 @@ export const useKanbanStore = create<KanbanState>((set, get) => ({
       get().scheduleSync();
     } catch (error) {
       set({ error: (error as Error).message });
+      throw error;
     }
   },
 
@@ -491,6 +496,7 @@ export const useKanbanStore = create<KanbanState>((set, get) => ({
         return { tasksByList: newTasksByList };
       });
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+      await get().loadAll();
       get().scheduleSync();
     } catch (error) {
       set({ error: (error as Error).message });
@@ -635,14 +641,6 @@ export const useKanbanStore = create<KanbanState>((set, get) => ({
   setDailyBriefingEnabled: async (enabled: boolean) => {
     await setSetting('dailyBriefingEnabled', enabled ? 'true' : 'false');
     set({ dailyBriefingEnabled: enabled });
-    let openCount = 0;
-    const { tasksByList } = get();
-    for (const k of Object.keys(tasksByList)) {
-      openCount += (tasksByList[k] || []).filter(
-        (t) => t.status === 'needsAction'
-      ).length;
-    }
-    await updateDailyBriefingNotification(enabled, openCount);
   },
 
   setColumnWidth: async (width: number) => {

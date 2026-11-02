@@ -1,6 +1,7 @@
 node_modules/
 .expo/
 dist/
+/Planner-GitHub-Upload*.zip
 /ios
 /android
 *.jks

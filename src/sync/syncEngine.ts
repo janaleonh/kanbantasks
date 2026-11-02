@@ -22,6 +22,7 @@ import {
 import { generateUUID } from '../utils/uuid';
 import { loadCachedUser } from '../auth/googleAuth';
 import { requireTaskAccount } from '../auth/taskAccount';
+import { withPlannerLock } from '../db/plannerLock';
 
 export type SyncStatus = 'idle' | 'syncing' | 'error';
 
@@ -35,6 +36,10 @@ export interface SyncResult {
 // Main sync entry point
 // ──────────────────────────────────────────────────────────
 export async function runSync(): Promise<SyncResult> {
+  return withPlannerLock(runSyncUnlocked);
+}
+
+async function runSyncUnlocked(): Promise<SyncResult> {
   const result: SyncResult = { pushed: 0, pulled: 0, errors: [] };
   const recentlyRemovedRemoteIds = new Set<string>();
 

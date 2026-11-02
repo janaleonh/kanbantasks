@@ -1,0 +1,184 @@
+name: Build Unsigned iOS IPA (Sideloadly / AltStore)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  build-ipa:
+    name: Build iOS .ipa on macOS
+    runs-on: macos-15
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Verify local Expo plugin is included
+        run: |
+          if [ ! -f plugins/withNotificationAppIcons.js ]; then
+            echo "::error file=app.json::Missing plugins/withNotificationAppIcons.js. Commit and push the plugins directory together with app.json."
+            exit 1
+          fi
+
+      - name: Select newest stable Xcode on runner
+        run: |
+          echo "Installed Xcode versions:"
+          ls -d /Applications/Xcode*.app
+          CHOSEN=$(ls -d /Applications/Xcode*.app | grep -vi beta | sort -V | tail -n 1)
+          echo "Using Xcode: $CHOSEN"
+          sudo xcode-select -s "$CHOSEN"
+          xcodebuild -version
+          swift --version
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Check source imports before native build
+        run: npx tsc --noEmit
+
+      - name: Patch expo-modules-jsi for Swift 6.2 (Xcode 26.3 compatibility)
+        run: |
+          node -e '
+            const fs = require("fs");
+            const base = "node_modules/expo-modules-jsi/apple";
+
+            // 1. Package.swift: keep Swift 6 + upcoming features as designed, only remove -Werror flags
+            let pkg = fs.readFileSync(base + "/Package.swift", "utf8");
+            pkg = pkg.replace(/\s*\"-Werror\",\s*\"[A-Za-z]+\",/g, "");
+            fs.writeFileSync(base + "/Package.swift", pkg);
+
+            // 2. JavaScriptObject.swift: wrap slot pointer in UncheckedSendable
+            let obj = fs.readFileSync(base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptObject.swift", "utf8");
+            obj = obj.replace("nonisolated(unsafe) let slot = buffer.baseAddress!", "let slot = UncheckedSendable(buffer.baseAddress!)");
+            obj = obj.replace("expo.emplaceUndefined(slot)", "expo.emplaceUndefined(slot.value)");
+            obj = obj.replace("expo.destroyValues(slot, 1)", "expo.destroyValues(slot.value, 1)");
+            obj = obj.replace("try encode(JavaScriptValue.Slot(slot), runtime)", "try encode(JavaScriptValue.Slot(slot.value), runtime)");
+            obj = obj.replace("body(slot.pointee)", "body(slot.value.pointee)");
+            fs.writeFileSync(base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptObject.swift", obj);
+
+            // 3. JavaScriptFunction.swift: wrap arguments and result pointers in UncheckedSendable
+            let fn = fs.readFileSync(base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptFunction.swift", "utf8");
+            fn = fn.replace("nonisolated(unsafe) let arguments = storage.baseAddress!", "let arguments = UncheckedSendable(storage.baseAddress!)");
+            fn = fn.replace("nonisolated(unsafe) let result = arguments + argumentCount", "let result = UncheckedSendable(arguments.value + argumentCount)");
+            fn = fn.replace("arguments + index", "arguments.value + index");
+            fn = fn.replace("expo.destroyValues(arguments, argumentCount + 1)", "expo.destroyValues(arguments.value, argumentCount + 1)");
+            fn = fn.replace("start: arguments, count: argumentCount", "start: arguments.value, count: argumentCount");
+            fn = fn.replace("pointee, arguments, argumentCount, result)", "pointee, arguments.value, argumentCount, result.value)");
+            fn = fn.replace("JavaScriptUnownedValue(runtime.pointee, result), runtime)", "JavaScriptUnownedValue(runtime.pointee, result.value), runtime)");
+            fs.writeFileSync(base + "/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptFunction.swift", fn);
+
+            // 4. build-xcframework.sh: remove -quiet for clear logs
+            let sh = fs.readFileSync(base + "/scripts/build-xcframework.sh", "utf8");
+            sh = sh.replace("    -quiet \\\n", "");
+            fs.writeFileSync(base + "/scripts/build-xcframework.sh", sh);
+
+            console.log("All ExpoModulesJSI patches applied successfully!");
+          '
+
+      - name: Generate Native iOS Project (Expo Prebuild)
+        env:
+          CI: "1"
+        run: npx expo prebuild --platform ios --clean --no-install
+
+      - name: Disable Code Signing in Podfile & Install Pods
+        run: |
+          cd ios
+          node -e '
+            const fs = require("fs");
+            let p = fs.readFileSync("Podfile", "utf8");
+            const patch = `
+              installer.pods_project.targets.each do |target|
+                target.build_configurations.each do |config|
+                  config.build_settings["CODE_SIGNING_ALLOWED"] = "NO"
+                  config.build_settings["CODE_SIGNING_REQUIRED"] = "NO"
+                  config.build_settings["CODE_SIGN_IDENTITY"] = ""
+                  config.build_settings["EXPANDED_CODE_SIGN_IDENTITY"] = ""
+                end
+              end
+            `;
+            p = p.replace("post_install do |installer|", "post_install do |installer|\n" + patch);
+            fs.writeFileSync("Podfile", p);
+          '
+          pod install
+
+      - name: Prebuild ExpoModulesJSI.xcframework (isolated step with clear log)
+        run: |
+          set -o pipefail
+          export PODS_ROOT="$PWD/ios/Pods"
+          export PLATFORM_NAME="iphoneos"
+          bash node_modules/expo-modules-jsi/apple/scripts/build-xcframework.sh 2>&1 | tee ios/xcodebuild.log
+
+      - name: Build Unsigned Release .app via Xcode
+        run: |
+          set -o pipefail
+          export NODE_BINARY=$(which node)
+          cd ios
+          WORKSPACE=$(ls -d *.xcworkspace | head -n 1)
+          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          echo "Building workspace: $WORKSPACE with scheme: $SCHEME"
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            EXPANDED_CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            build 2>&1 | tee -a xcodebuild.log
+
+      - name: Show real compiler errors (open this step if build failed)
+        if: failure()
+        run: |
+          if [ ! -f ios/xcodebuild.log ]; then
+            echo "Build stopped before Xcode. See the first failed step above for the source or prebuild error."
+            exit 0
+          fi
+          grep -nE "error:|: error |fatal error|Error:|Unable to resolve|did not produce|No such module" ios/xcodebuild.log | cut -c1-300 | head -n 10 | while IFS= read -r line; do
+            echo "::error title=XcodeError::$line"
+          done
+          {
+            echo "## Xcode error summary (short)"
+            echo '```'
+            echo "--- compiler / script errors ---"
+            grep -nE "error:|: error |fatal error|Error:|Unable to resolve|did not produce|No such module|\*\* BUILD FAILED|failed with exit code" ios/xcodebuild.log | cut -c1-400 | head -n 40 || true
+            echo
+            echo "--- Last 80 lines of xcodebuild.log ---"
+            tail -n 80 ios/xcodebuild.log | cut -c1-400 || true
+            echo '```'
+          } > error-summary.txt
+          cat error-summary.txt
+          cat error-summary.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Build Log on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-error-log
+          path: ios/xcodebuild.log
+
+      - name: Package .app into KanbanTasks.ipa
+        run: |
+          mkdir -p Payload
+          cp -r ios/build/Build/Products/Release-iphoneos/*.app Payload/
+          zip -r9 KanbanTasks.ipa Payload
+
+      - name: Upload KanbanTasks.ipa Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KanbanTasks-unsigned-ipa
+          path: KanbanTasks.ipa
+          retention-days: 30
