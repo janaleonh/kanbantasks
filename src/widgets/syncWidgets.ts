@@ -49,19 +49,27 @@ export function refreshWidgets(reloadData = false): Promise<boolean> {
           const date = i === 0 ? now : new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
           return { date, snapshot: buildWidgetSnapshots(current.taskLists, current.tasksByList, date) };
         });
-        const today = entries.map(({ date, snapshot }) => ({ date, props: snapshot.today }));
-        const overview = entries.map(({ date, snapshot }) => ({ date, props: snapshot.overview }));
+        const stamp = now.toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+        const today = entries.map(({ date, snapshot }) => ({ date, props: { ...snapshot.today, stamp } }));
+        const overview = entries.map(({ date, snapshot }) => ({ date, props: { ...snapshot.overview, stamp } }));
         todayModule.default.updateTimeline(today);
         overviewModule.default.updateTimeline(overview);
         // Verify the native write. The extension's separate read/signature still
         // requires an on-device check; a JS call alone is not proof of delivery.
         const stored = await Promise.all([todayModule.default.getTimeline(), overviewModule.default.getTimeline()]);
-        if (stored.some((timeline, index) => timeline[0]?.date.getTime() !== entries[0].date.getTime()
-          || timeline[0]?.props.count !== (index === 0 ? today : overview)[0].props.count
-          || timeline[0]?.props.hasData !== true)) throw new Error('Widget timeline not persisted');
+        const expected = [today, overview];
+        const invalid = stored.some((timeline, index) => timeline.length !== entries.length || timeline.some((entry, i) => {
+          const props = entry.props, sent = expected[index][i];
+          return entry.date.getTime() !== sent.date.getTime() || !props?.hasData || props.stamp !== stamp ||
+            props.count !== sent.props.count || props.overdue !== sent.props.overdue ||
+            props.tasks?.length !== sent.props.tasks.length || props.lists?.length !== sent.props.lists.length ||
+            sent.props.tasks.some((task, j) => task.id !== props.tasks[j]?.id || task.title !== props.tasks[j]?.title || task.listTitle !== props.tasks[j]?.listTitle) ||
+            sent.props.lists.some((list, j) => list.id !== props.lists[j]?.id || list.count !== props.lists[j]?.count || list.title !== props.lists[j]?.title);
+        }));
+        if (invalid) throw new Error('Widget timeline not persisted');
         const latest = useKanbanStore.getState();
         if (latest.taskLists !== current.taskLists || latest.tasksByList !== current.tasksByList) queued = true;
-        useWidgetStatus.setState({ state: 'updated', updatedAt: now.toISOString(), message: `Bereitgestellt: ${today[0].props.count} heute fällig oder überfällig · ${overview[0].props.count} offene Aufgaben insgesamt. iOS bestimmt den Anzeigezeitpunkt.` });
+        useWidgetStatus.setState({ state: 'updated', updatedAt: now.toISOString(), message: `Bereitgestellt: ${today[0].props.count} im Heute-Widget · ${overview[0].props.count} offene Aufgaben insgesamt. Heute: ${today[0].props.tasks.slice(0, 3).map(task => task.title).join(' · ') || 'keine'}. Übersicht: ${overview[0].props.tasks.slice(0, 3).map(task => task.title).join(' · ') || 'keine'}. iOS bestimmt den Anzeigezeitpunkt.` });
       } while (queued);
       return true;
     } catch {
@@ -86,7 +94,7 @@ export function startWidgetSync() {
     clearTimeout(timer);
     timer = setTimeout(publish, 200);
   });
-  const subscription = AppState.addEventListener('change', () => { clearTimeout(timer); publish(); });
+  const subscription = AppState.addEventListener('change', phase => { if (phase === 'active') { clearTimeout(timer); publish(); } });
   // Hydrate even when launched directly into Settings, Calendar or a document.
   publish();
   return () => { disposed = true; clearTimeout(timer); unsubscribe(); subscription.remove(); };

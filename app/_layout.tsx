@@ -1,3 +1,5 @@
+import { startScanOutbox } from '../src/documents/scanOutbox';
+import { startFolderSync } from '../src/documents/folderSync';
 import { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -20,6 +22,8 @@ export default function RootLayout() {
   useEffect(startWidgetSync, []);
   useEffect(startCalendarSync, []);
   useEffect(startDocumentSync, []);
+  useEffect(startScanOutbox, []);
+  useEffect(startFolderSync, []);
   useEffect(startTaskIntents, []);
   useEffect(startDailyBriefings, []);
   useEffect(startAutomaticBackups, []);

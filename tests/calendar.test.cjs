@@ -19,6 +19,13 @@ function loadSource(relative, mocks = {}, environment = {}) {
 }
 
 const dates = loadSource('src/calendar/dates.ts');
+test('a projected start falling today remains the next period until a real start is recorded', () => {
+  const { nextPeriod } = loadSource('src/calendar/cycle.ts');
+  const cycle = { starts: ['2026-10-10'], length: 28, bleeding: 5 };
+  assert.equal(nextPeriod(cycle, '2026-11-07'), '2026-11-07');
+  cycle.starts.push('2026-11-07');
+  assert.equal(nextPeriod(cycle, '2026-11-07'), '2026-12-05');
+});
 const calendar = { id: 'work@example.com', summary: 'Arbeit', backgroundColor: '#007AFF' };
 const raw = (id, start, end, more = {}) => ({ id, summary: id, start, end, ...more });
 const event = (...args) => dates.normalizeEvent(raw(...args), calendar);
@@ -349,4 +356,50 @@ test('midnight and foreground refresh remove yesterday from Today even without f
   assert.equal(state.todayKey, '2026-11-03');
   stop();
   assert.equal(removed, true);
+});
+
+test('cycle projection uses calendar days across DST and resets at a recorded start', () => {
+  const { cycleDay } = loadSource('src/calendar/cycle.ts');
+  const cycle = { length: 28, bleeding: 5, starts: ['2026-03-18', '2026-04-12'] };
+  assert.equal(cycleDay(cycle, '2026-03-17'), null);
+  assert.match(cycleDay(cycle, '2026-03-18'), /eingetragen/);
+  assert.match(cycleDay(cycle, '2026-03-29'), /Fruchtbare/);
+  assert.match(cycleDay(cycle, '2026-04-01'), /Eisprung/);
+  assert.match(cycleDay(cycle, '2026-04-12'), /eingetragen/);
+  assert.match(cycleDay(cycle, '2026-05-10'), /Periode/);
+});
+
+test('historical periods insert out of order and update the median and forecast', () => {
+  const {enterPeriod,cycleStats,nextPeriod,cycleDay}=loadSource('src/calendar/cycle.ts');
+  let c={starts:[],length:28,bleeding:5};
+  for (const [start,end] of [['2026-05-01',null],['2026-03-01','2026-03-04'],['2026-03-30','2026-04-02']])
+    c=enterPeriod(c,start,end,'2026-05-03');
+  const stats=cycleStats(c,'2026-05-03');
+  assert.deepEqual(stats.intervals,[29,32]);
+  assert.equal(stats.typical,31);
+  assert.equal(nextPeriod(c,'2026-05-03'),'2026-06-01');
+  assert.equal(nextPeriod({...c,automatic:false},'2026-05-03'),'2026-05-29');
+  assert.equal(cycleDay(c,'2026-03-31'),'Periode · eingetragen');
+  assert.equal(cycleStats(c,'2026-04-01').length,28);
+});
+
+test('period corrections preserve other dates and reject overlap or invalid boundaries',()=>{
+  const {enterPeriod}=loadSource('src/calendar/cycle.ts');
+  const base={starts:['2026-03-01','2026-04-01'],ends:{'2026-03-01':'2026-03-05'},length:28,bleeding:5};
+  for(const [s,e] of [['2026-03-05',null],['2026-03-29','2026-04-01'],['2026-02-30',null],['2026-05-02',null],['2026-04-12','2026-04-08']])
+    assert.throws(()=>enterPeriod(base,s,e,'2026-05-01'));
+  const edited=enterPeriod(base,'2026-03-02','2026-03-06','2026-05-01','2026-03-01');
+  assert.deepEqual(edited.ends,{'2026-03-02':'2026-03-06'});
+  assert.deepEqual(edited.starts,['2026-03-02','2026-04-01']);
+});
+
+test('trend uses recorded consecutive intervals, limits the window and identifies gaps',()=>{
+  const {cycleStats}=loadSource('src/calendar/cycle.ts');
+  const offsets=[0,20,40,60,160,186,213,241,270];
+  const starts=offsets.map(n=>new Date(Date.UTC(2025,0,1+n)).toISOString().slice(0,10));
+  const stats=cycleStats({starts,length:28,bleeding:5},'2026-01-01');
+  assert.deepEqual(stats.intervals,[20,100,26,27,28,29]);
+  assert.deepEqual(stats.usable,[20,26,27,28,29]);
+  assert.equal(stats.length,27);
+  assert.match(stats.trend,/länger/);
 });

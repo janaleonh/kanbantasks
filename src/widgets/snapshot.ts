@@ -2,6 +2,7 @@ import type { Task } from '../db/taskRepo';
 import type { TaskList } from '../db/taskListRepo';
 
 export type WidgetProps = {
+  stamp?: string;
   count: number;
   overdue: number;
   tasks: { id: string; title: string; listTitle: string }[];
@@ -18,7 +19,7 @@ export function buildWidgetSnapshots(lists: TaskList[], tasksByList: Record<stri
     .filter((task) => task.status === 'needsAction' && !task.deletedLocally)
     .map((task) => ({ ...task, listTitle: list.title })));
   const dueTime = (task: Task) => task.due ? new Date(task.due).getTime() : Infinity;
-  const today = open.filter((task) => dueTime(task) < end)
+  const today = open.filter((task) => dueTime(task) < end || (task.due == null && task.listTitle.trim().toLocaleLowerCase('de-DE') === 'heute'))
     .sort((a, b) => dueTime(a) - dueTime(b) || a.localPosition - b.localPosition);
   const overdue = today.filter((task) => dueTime(task) < start).length;
   const listCounts = visible.map((list) => ({

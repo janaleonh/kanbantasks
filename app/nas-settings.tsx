@@ -4,6 +4,7 @@ import { Stack, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDocumentStore } from '../src/stores/useDocumentStore';
 import { currentHomeNetwork } from '../src/documents/network';
+import { DavError } from '../src/documents/webdav';
 import type { NasInput } from '../src/documents/types';
 import { useTheme } from '../src/hooks/useTheme';
 
@@ -29,9 +30,11 @@ export default function NasSettingsScreen() {
     try {
       await saveConfig(input, password); saved = true;
       dirty.current = false; setPassword('');
-      if (test) await testConnection();
-      setNotice(test ? 'Verbindung erfolgreich. Du kannst jetzt deine Dokumente auswählen.' : 'NAS-Einstellungen gespeichert. Der Abgleich erfolgt im hinterlegten Heim-WLAN.');
-    } catch (err) { setError(`${saved ? 'Einstellungen gespeichert. ' : ''}${err instanceof Error ? err.message : 'Die Verbindung konnte nicht gespeichert werden.'}`); }
+      setNotice(test ? await testConnection() : 'NAS-Einstellungen gespeichert. Der Abgleich erfolgt im hinterlegten Heim-WLAN.');
+    } catch (err) {
+      if(saved && err instanceof DavError && err.status && [401,403,404].includes(err.status)){
+        setError('WebDAV erreichbar. ' + ({401:'Anmeldung abgelehnt. Prüfe den NAS-Benutzernamen und gib das Passwort erneut ein.',403:'Zugriff auf den Startordner verweigert. Prüfe die Leseberechtigung für den Benutzer in DSM.',404:'Startordner nicht gefunden. Übernimm den exakten Namen aus DSM → Freigegebener Ordner.'}[err.status]));
+      } else setError(`${saved ? 'Einstellungen gespeichert. ' : ''}${err instanceof Error ? err.message : 'Die Verbindung konnte nicht gespeichert werden.'}`); }
     finally { running.current = false; setBusy(false); }
   };
   const remove = () => Alert.alert('NAS-Verbindung entfernen?', 'Die gespeicherten NAS-Zugangsdaten und alle lokalen NAS-Offlinekopien werden vom iPhone entfernt. Die Originaldateien auf deinem NAS bleiben erhalten.', [

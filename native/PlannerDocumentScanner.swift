@@ -1,5 +1,6 @@
 import UIKit
 import VisionKit
+import Vision
 import PDFKit
 import AVFoundation
 internal import ExpoModulesCore
@@ -43,30 +44,46 @@ private final class PlannerScanDelegate: NSObject, VNDocumentCameraViewControlle
     guard scan.pageCount > 0 && scan.pageCount <= 20 else {
       controller.dismiss(animated: true) { self.finish(nil, "Bitte scanne zwischen 1 und 20 Seiten pro Dokument.") }; return
     }
-    do {
-      let pdf = PDFDocument()
-      for index in 0..<scan.pageCount {
-        try autoreleasepool {
-          let original = scan.imageOfPage(at: index)
-          let ratio = min(1, 2400 / max(original.size.width, original.size.height))
-          let size = CGSize(width: original.size.width * ratio, height: original.size.height * ratio)
-          let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = true
-          let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
-            UIColor.white.setFill(); context.cgContext.fill(CGRect(origin: .zero, size: size)); original.draw(in: CGRect(origin: .zero, size: size))
+    let pageCount = scan.pageCount
+    let complete: ([String: Any]?, String?) -> Void = { result, error in
+      DispatchQueue.main.async { controller.dismiss(animated: true) { self.finish(result, error) } }
+    }
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        var content = ""
+        let pdf = PDFDocument()
+        for index in 0..<scan.pageCount {
+          try autoreleasepool {
+            let original = scan.imageOfPage(at: index)
+            let ratio = min(1, 2400 / max(original.size.width, original.size.height))
+            let size = CGSize(width: original.size.width * ratio, height: original.size.height * ratio)
+            let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = true
+            let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+              UIColor.white.setFill(); context.cgContext.fill(CGRect(origin: .zero, size: size)); original.draw(in: CGRect(origin: .zero, size: size))
+            }
+            guard let data = image.jpegData(compressionQuality: 0.85), let compressed = UIImage(data: data), let page = PDFPage(image: compressed) else { throw NSError(domain: "PlannerScan", code: 1) }
+            pdf.insert(page, at: index)
+            if content.count < 80000, let cg = image.cgImage {
+              let request = VNRecognizeTextRequest()
+              request.recognitionLevel = .accurate
+              request.recognitionLanguages = ["de-DE", "en-US"]
+              if (try? VNImageRequestHandler(cgImage: cg, options: [:]).perform([request])) != nil {
+                let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
+                content += " " + String(text.prefix(79999 - content.count))
+              }
+            }
           }
-          guard let data = image.jpegData(compressionQuality: 0.85), let compressed = UIImage(data: data), let page = PDFPage(image: compressed) else { throw NSError(domain: "PlannerScan", code: 1) }
-          pdf.insert(page, at: index)
         }
+        guard let data = pdf.dataRepresentation(), data.count <= 50 * 1024 * 1024 else {
+          complete(nil, "Die PDF ist größer als 50 MB. Bitte verwende weniger Seiten."); return
+        }
+        try FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
+        let url = self.directory.appendingPathComponent(UUID().uuidString.lowercased() + ".pdf")
+        try data.write(to: url, options: .atomic)
+        complete(["canceled": false, "uri": url.absoluteString, "pages": pageCount, "content": content], nil)
+      } catch {
+        complete(nil, "Die PDF konnte nicht erstellt werden. Bitte prüfe den freien Speicher.")
       }
-      guard let data = pdf.dataRepresentation(), data.count <= 50 * 1024 * 1024 else {
-        controller.dismiss(animated: true) { self.finish(nil, "Die PDF ist größer als 50 MB. Bitte verwende weniger Seiten.") }; return
-      }
-      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-      let url = directory.appendingPathComponent(UUID().uuidString.lowercased() + ".pdf")
-      try data.write(to: url, options: .atomic)
-      controller.dismiss(animated: true) { self.finish(["canceled": false, "uri": url.absoluteString, "pages": scan.pageCount], nil) }
-    } catch {
-      controller.dismiss(animated: true) { self.finish(nil, "Die PDF konnte nicht erstellt werden. Bitte prüfe den freien Speicher.") }
     }
   }
 }

@@ -8,6 +8,7 @@ export interface NasConfig {
 }
 export type NasInput = Omit<NasConfig, 'id'>;
 export interface DavEntry {
+  canCreate?: boolean;
   path: string;
   name: string;
   directory: boolean;

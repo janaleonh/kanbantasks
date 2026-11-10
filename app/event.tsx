@@ -18,6 +18,7 @@ const REPEATS: { id: RepeatMode; label: string }[] = [
 ];
 
 export default function EventScreen() {
+  const [advanced, setAdvanced] = useState(false);
   const params = useLocalSearchParams<{ calendarId?: string; eventId?: string; date?: string }>();
   const theme = useTheme();
   const router = useRouter();
@@ -193,7 +194,8 @@ export default function EventScreen() {
             }} />
             <EventDatePicker label={draft.allDay ? 'Letzter Tag' : 'Ende'} value={draft.end} allDay={draft.allDay} timeZone={pickerZone} onChange={(end) => change('end', end)} />
           </View>
-          {!draft.allDay && <View style={styles.section}>{label('ZEITZONE')}<TextInput accessibilityLabel="Zeitzone" autoCapitalize="none" autoCorrect={false} style={inputStyle} value={draft.timeZone} onChangeText={(value) => change('timeZone', value)} placeholder="Europe/Berlin" placeholderTextColor={theme.subtext} /><Text style={[styles.hint, { color: theme.subtext }]}>Datum und Uhrzeit werden in dieser Zeitzone angezeigt.</Text></View>}
+          {!original && <TouchableOpacity accessibilityRole="button" accessibilityState={{expanded:advanced}} onPress={()=>setAdvanced(!advanced)} style={styles.section}><Text style={{color:theme.accent}}>{advanced?'Weitere Optionen schließen':'Weitere Optionen'}</Text></TouchableOpacity>}
+          {(original || advanced) && <>{!draft.allDay && <View style={styles.section}>{label('ZEITZONE')}<TextInput accessibilityLabel="Zeitzone" autoCapitalize="none" autoCorrect={false} style={inputStyle} value={draft.timeZone} onChangeText={(value) => change('timeZone', value)} placeholder="Europe/Berlin" placeholderTextColor={theme.subtext} /><Text style={[styles.hint, { color: theme.subtext }]}>Datum und Uhrzeit werden in dieser Zeitzone angezeigt.</Text></View>}
           <View style={styles.section}>{label('ORT')}<TextInput accessibilityLabel="Ort" style={inputStyle} value={draft.location} onChangeText={(value) => change('location', value)} placeholder="Ort hinzufügen" placeholderTextColor={theme.subtext} /></View>
           <View style={styles.section}>{label('BESCHREIBUNG')}<TextInput accessibilityLabel="Beschreibung" style={[inputStyle, styles.notes]} value={draft.description} onChangeText={(value) => change('description', value)} placeholder="Notizen hinzufügen" placeholderTextColor={theme.subtext} multiline scrollEnabled textAlignVertical="top" /></View>
           {!original?.recurringEventId && <View style={styles.section}>{label('WIEDERHOLEN')}
@@ -225,7 +227,7 @@ export default function EventScreen() {
           <View style={styles.section}>{label('TERMINFARBE')}<View style={styles.choices}>{EVENT_COLORS.map((color, index) => {
             const id = index ? String(index) : '';
             return <TouchableOpacity key={id} accessibilityRole="radio" accessibilityLabel={index ? `Terminfarbe ${index}` : 'Kalenderfarbe'} accessibilityState={{ selected: draft.colorId === id }} onPress={() => change('colorId', id)} style={[styles.color, { backgroundColor: color || sourceCalendar?.backgroundColor || theme.accent, borderColor: draft.colorId === id ? theme.text : 'transparent' }]}>{draft.colorId === id && <Ionicons name="checkmark" size={20} color="#FFFFFF" />}</TouchableOpacity>;
-          })}</View></View>
+          })}</View></View></>}
         </View>
       </>}
     </ScrollView>

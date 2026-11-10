@@ -24,7 +24,7 @@ function fixture(options = {}) {
   state.loadAll = async () => { loads++; replace({ taskLists: options.empty ? [] : lists, tasksByList: options.empty ? {} : tasks, hasLoaded: true }); };
   function widget() {
     let stored = [];
-    return { calls: [], updateTimeline(entries) { this.calls.push(entries); stored = entries; }, async getTimeline() { if (options.beforeRead) await options.beforeRead(state, replace); return options.badWrite ? [] : stored; } };
+    return { calls: [], updateTimeline(entries) { this.calls.push(entries); stored = entries; }, async getTimeline() { if (options.beforeRead) await options.beforeRead(state, replace); return options.badWrite ? [] : options.staleTitle ? stored.map((entry,i) => i === 2 ? {...entry,props:{...entry.props,tasks:entry.props.tasks.map(t=>({...t,title:'Alter Titel'}))}} : entry) : stored; } };
   }
   const today = widget(), overview = widget();
   const service = load('src/widgets/syncWidgets.ts', {
@@ -101,4 +101,10 @@ test('foreground refresh and subsequent store edits republish current data', asy
   f.fireApp(); await f.service.refreshWidgets();
   assert.ok(f.overview.calls.length > previous);
   stop();
+});
+
+test('matching counts cannot hide stale task titles in a later widget entry', async () => {
+  const f = fixture({staleTitle:true});
+  assert.equal(await f.service.refreshWidgets(),false);
+  assert.equal(f.status.state,'error');
 });

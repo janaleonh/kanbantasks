@@ -24,12 +24,6 @@ interface TaskCardProps {
   onStartDrag: (task: Task, pageX: number, pageY: number) => void;
 }
 
-const PRIORITY_META = {
-  none: null,
-  low: { label: '! Niedrig', color: '#007AFF' },
-  medium: { label: '!! Mittel', color: '#FF9500' },
-  high: { label: '!!! Hoch', color: '#FF3B30' },
-};
 
 export function TaskCard({
   task,
@@ -43,7 +37,6 @@ export function TaskCard({
   const theme = useTheme();
 
   const isCompleted = task.status === 'completed';
-  const prio = PRIORITY_META[task.priority || 'none'];
 
   const lastTapRef = useRef<number>(0);
   const singleTapTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -106,9 +99,7 @@ export function TaskCard({
     !isCompleted &&
     new Date(task.due).setHours(23, 59, 59, 999) < Date.now();
 
-  const hasBadges = Boolean(
-    (prio && !isCompleted) || task.due || task.reminderAt
-  );
+  const hasBadges = !!task.due || !!task.checklist?.length;
 
   return (
     <Pressable
@@ -182,17 +173,7 @@ export function TaskCard({
                 {task.title}
               </Text>
             </View>
-            {(task.project || task.tags?.length) ? <Text numberOfLines={1} style={{ color: theme.accent, fontSize: 11, marginTop: 5 }}>{[task.project, ...(task.tags || []).map(tag => `#${tag}`)].filter(Boolean).join(' · ')}</Text> : null}
-            {(task.recurrence || task.checklist?.length || task.attachments?.length) ? <Text style={{ color: theme.subtext, fontSize: 11, marginTop: 5 }}>{[task.recurrence ? '↻ Wiederholt sich' : '', task.checklist?.length ? `${task.checklist.filter(item => item.done).length}/${task.checklist.length} Schritte` : '', task.attachments?.length ? `📎 ${task.attachments.length}` : ''].filter(Boolean).join(' · ')}</Text> : null}
 
-            {task.notes ? (
-              <Text
-                style={[styles.notes, { color: theme.subtext }]}
-                numberOfLines={2}
-              >
-                {task.notes}
-              </Text>
-            ) : null}
           </View>
 
           <View
@@ -220,21 +201,7 @@ export function TaskCard({
         {hasBadges && (
           <View style={styles.cardFooter}>
             <View style={styles.metaLeft}>
-              {prio && !isCompleted ? (
-                <View
-                  style={[
-                    styles.badgePill,
-                    {
-                      backgroundColor: prio.color + '24',
-                      borderColor: prio.color + '55',
-                    },
-                  ]}
-                >
-                  <Text style={[styles.badgeText, { color: prio.color }]}>
-                    {prio.label}
-                  </Text>
-                </View>
-              ) : null}
+
 
               {task.due ? (
                 <View
@@ -275,30 +242,9 @@ export function TaskCard({
                 </View>
               ) : null}
 
-              {task.reminderAt ? (
-                <View
-                  style={[
-                    styles.badgePill,
-                    {
-                      backgroundColor: '#AF52DE26',
-                      borderColor: '#AF52DE66',
-                    },
-                  ]}
-                >
-                  <Ionicons name="notifications" size={11} color="#AF52DE" />
-                  <Text
-                    style={[
-                      styles.badgeText,
-                      { color: theme.isDark ? '#E9D5FF' : '#AF52DE' },
-                    ]}
-                  >
-                    {new Date(task.reminderAt).toLocaleTimeString('de-DE', {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                  </Text>
-                </View>
-              ) : null}
+              {!!task.checklist?.length && <Text style={{color:theme.subtext,fontSize:12,fontWeight:'600'}}>
+                {task.checklist.filter(item=>item.done).length} von {task.checklist.length}
+              </Text>}
             </View>
           </View>
         )}

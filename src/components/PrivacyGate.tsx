@@ -19,16 +19,17 @@ export function PrivacyGate({ children }: { children: React.ReactNode }) {
     }
   }, [enabled]);
   useEffect(() => {
-    const subscription = AppState.addEventListener('change', next => { setPhase(next); if (next === 'background') lock(); });
+    const subscription = AppState.addEventListener('change', next => { setPhase(next); if (next === 'background') { trying.current = false; lock(); } });
+    setPhase(AppState.currentState);
     return () => subscription.remove();
   }, [lock]);
   useEffect(() => {
-    if (initialized && enabled && locked && phase === 'active' && !trying.current) {
+    if (initialized && enabled && locked && !busy && phase === 'active' && !trying.current) {
       trying.current = true; void unlock();
     }
     if (!locked) trying.current = false;
-  }, [initialized, enabled, locked, phase, unlock]);
-  const blocked = !initialized || locked || (enabled && phase !== 'active');
+  }, [initialized, enabled, locked, busy, phase, unlock]);
+  const blocked = !initialized || locked;
   const screen = <View style={[styles.cover, { backgroundColor: theme.background }]}>
     <Text style={[styles.title, { color: theme.text }]}>Planner</Text>
     <Text style={[styles.label, { color: theme.subtext }]}>{initialized ? 'Deine Inhalte sind geschützt.' : 'Planner wird vorbereitet …'}</Text>
@@ -37,7 +38,7 @@ export function PrivacyGate({ children }: { children: React.ReactNode }) {
   </View>;
   // Keep drafts mounted after the first unlock; a native modal also covers task modals.
   if (!opened) return screen;
-  return <>{children}<Modal visible={blocked} animationType="none" presentationStyle="fullScreen" onRequestClose={() => {}}>{screen}</Modal></>;
+  return <>{children}{blocked && <Modal visible animationType="none" presentationStyle="fullScreen" onRequestClose={() => {}}>{screen}</Modal>}</>;
 }
 
 const styles = StyleSheet.create({ cover: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 30, gap: 20 }, title: { fontSize: 32, fontWeight: '700' }, label: { fontSize: 14, lineHeight: 22, textAlign: 'center' }, button: { borderRadius: 14, paddingHorizontal: 28, paddingVertical: 14 } });

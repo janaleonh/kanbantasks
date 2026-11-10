@@ -90,7 +90,25 @@ async function runMigrations(database: SQLite.SQLiteDatabase): Promise<void> {
     CREATE TABLE IF NOT EXISTS capture_receipts (id TEXT PRIMARY KEY, taskId TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS task_repeat_receipts (sourceId TEXT PRIMARY KEY, nextTaskId TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS task_history (id TEXT PRIMARY KEY, taskId TEXT NOT NULL, label TEXT NOT NULL, beforeJson TEXT NOT NULL, afterJson TEXT NOT NULL, createdAt TEXT NOT NULL, undone INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS note_templates (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, folder TEXT NOT NULL, tags TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', folder TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '', pinned INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'active', updatedAt TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS note_versions (id INTEGER PRIMARY KEY, noteId TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE, title TEXT NOT NULL, body TEXT NOT NULL, savedAt TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS note_version_owner ON note_versions(noteId,id);
+    CREATE TABLE IF NOT EXISTS project_items (kind TEXT NOT NULL, owner TEXT NOT NULL, item TEXT NOT NULL, project TEXT NOT NULL, PRIMARY KEY(kind,owner,item));
+    CREATE TABLE IF NOT EXISTS inbox_files (id TEXT PRIMARY KEY, delivery TEXT NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS inbox_receipts (delivery TEXT PRIMARY KEY);
+    CREATE TABLE IF NOT EXISTS note_tasks (taskId TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE, noteId TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE);
+    CREATE TABLE IF NOT EXISTS note_files (id TEXT PRIMARY KEY, noteId TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE, name TEXT NOT NULL, mime TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS note_files_owner ON note_files(noteId);
     CREATE TABLE IF NOT EXISTS scans (id TEXT PRIMARY KEY, name TEXT NOT NULL, pages INTEGER NOT NULL, size INTEGER NOT NULL, createdAt TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS scan_tasks (taskId TEXT PRIMARY KEY, scanId TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS scan_text (scanId TEXT PRIMARY KEY, content TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS scan_uploads (scanId TEXT PRIMARY KEY, configId TEXT NOT NULL, folder TEXT NOT NULL, filename TEXT NOT NULL, state TEXT NOT NULL, error TEXT);
+    CREATE TRIGGER IF NOT EXISTS cleanup_scan AFTER DELETE ON scans BEGIN
+      DELETE FROM scan_text WHERE scanId = OLD.id;
+      DELETE FROM scan_uploads WHERE scanId = OLD.id;
+      DELETE FROM scan_tasks WHERE scanId = OLD.id;
+    END;
     INSERT OR IGNORE INTO task_repeat_receipts (sourceId, nextTaskId) SELECT repeatSourceId, id FROM tasks WHERE repeatSourceId IS NOT NULL;
   `);
 }

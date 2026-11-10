@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   ScrollView,
@@ -25,6 +25,7 @@ const BOARD_PADDING = 16;
 const DELETE_ZONE_HEIGHT = 115;
 
 interface KanbanBoardProps {
+  compose?: {listId:string};
   taskLists: TaskList[];
   tasksByList: Record<string, Task[]>;
   layoutMode: BoardLayout;
@@ -34,7 +35,7 @@ interface KanbanBoardProps {
   onRenameList: (id: string, title: string) => void;
   onChangeColor: (id: string, color: string) => void;
   onReorderLists: (orderedIds: string[]) => void;
-  onAddTask: (listId: string, title: string) => void;
+  onAddTask: (listId: string, title: string) => Promise<void>;
   onToggleTask: (id: string) => void;
   onDeleteTask: (id: string) => void;
   onMoveTask: (
@@ -47,6 +48,7 @@ interface KanbanBoardProps {
 }
 
 export function KanbanBoard({
+  compose,
   taskLists,
   tasksByList,
   layoutMode,
@@ -85,6 +87,12 @@ export function KanbanBoard({
   const wasOverDeleteRef = useRef(false);
   const isVertical = layoutMode === 'vertical';
   const columnStride = (columnWidth || DEFAULT_COLUMN_WIDTH) + COLUMN_MARGIN;
+  useEffect(()=>{
+    if(!compose)return;
+    const index=taskLists.findIndex(list=>list.id===compose.listId);
+    if(index<0)return;
+    scrollRef.current?.scrollTo(isVertical ? {y:verticalLayouts.current[compose.listId]?.y??0,animated:false} : {x:index*columnStride,animated:false});
+  },[compose]);
 
   const handleScroll = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -395,6 +403,7 @@ export function KanbanBoard({
       onStartShouldSetResponderCapture={() => isAnyDragging}
     >
       <ScrollView
+        keyboardShouldPersistTaps="handled"
         ref={scrollRef}
         horizontal={!isVertical}
         style={styles.board}
@@ -413,6 +422,7 @@ export function KanbanBoard({
         {taskLists.map((list) => (
           <KanbanColumn
             key={list.id}
+            compose={compose?.listId===list.id?compose:undefined}
             list={list}
             columnWidth={columnWidth}
             tasks={tasksByList[list.id] || []}

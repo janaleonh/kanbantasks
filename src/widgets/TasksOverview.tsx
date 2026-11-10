@@ -5,6 +5,7 @@ import type { WidgetProps } from './snapshot';
 
 const TasksOverview = (props: WidgetProps, environment: WidgetEnvironment) => {
   'widget';
+  if (!props?.hasData) return <Text modifiers={[widgetURL('kanban-tasks:///?widget=overview')]}>Planner öffnen, um Aufgaben zu laden</Text>;
   const compact = environment.widgetFamily === 'systemSmall';
   const subtle = { type: 'hierarchical', style: 'secondary' } as const;
   return (
@@ -18,10 +19,10 @@ const TasksOverview = (props: WidgetProps, environment: WidgetEnvironment) => {
       <HStack>
         <Text modifiers={[font({ size: 13, weight: 'semibold' }), foregroundStyle(subtle)]}>AUFGABEN</Text>
         <Spacer />
-        <Text modifiers={[font({ size: 13 }), foregroundStyle(subtle)]}>▤</Text>
+        <Text modifiers={[font({ size: 13 }), foregroundStyle(subtle)]}>{props.stamp || ''}</Text>
       </HStack>
       <HStack alignment="firstTextBaseline" spacing={8}>
-        <Text modifiers={[font({ size: 38, weight: 'bold', design: 'rounded' })]}>{props.count}</Text>
+        <Text modifiers={[font({ size: 38, weight: 'bold', design: 'rounded' })]}>{String(props.count)}</Text>
         <Text modifiers={[font({ size: 13 }), foregroundStyle(subtle)]}>offen</Text>
       </HStack>
       {props.lists.slice(0, compact ? 2 : environment.widgetFamily === 'systemLarge' ? 5 : 3).map((list) => (
@@ -31,7 +32,6 @@ const TasksOverview = (props: WidgetProps, environment: WidgetEnvironment) => {
           <Text modifiers={[font({ size: 13, weight: 'semibold' }), foregroundStyle(subtle)]}>{list.count}</Text>
         </HStack>
       ))}
-      {!props.hasData && <Text modifiers={[font({ size: 12 }), foregroundStyle(subtle)]}>App zum Laden öffnen</Text>}
       {props.hasData && props.lists.length === 0 && <Text modifiers={[font({ size: 12 }), foregroundStyle(subtle)]}>Dein Tag beginnt mit einer Idee.</Text>}
       <Spacer minLength={0} />
     </VStack>

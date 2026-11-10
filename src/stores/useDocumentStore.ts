@@ -17,7 +17,7 @@ interface DocumentState {
   saveConfig: (input: NasInput, password: string) => Promise<void>;
   disconnect: () => Promise<void>;
   browse: (path: string) => Promise<void>;
-  testConnection: () => Promise<void>;
+  testConnection: () => Promise<string>;
   getRemoteEntry: (path: string, expectedConfigId: string) => Promise<DavEntry>;
   uploadFile: (folder: string, source: UploadSource, expectedConfigId: string) => Promise<void>;
   uploadBackup: (source: UploadSource, expectedConfigId: string) => Promise<void>;
@@ -122,8 +122,14 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   testConnection: async () => {
-    await session(async ({ client, signal, assert }) => { await client.list('', signal); assert(); });
+    const rights = await session(async ({ client, signal, assert }) => {
+      await client.list('', signal); assert();
+      try {const root=(await client.list('',signal,'0',true)).find(entry=>entry.path==='');assert();return root?.canCreate;}
+      catch {assert();return undefined;}
+    });
     set({ status: 'ready', error: null });
+    const write = rights === true ? 'NAS meldet Schreibrecht für neue Dateien.' : rights === false ? 'Keine Berechtigung zum Anlegen gemeldet. Prüfe die Schreibfreigabe für diesen Benutzer in DSM.' : 'Schreibrechte werden vom NAS nicht gemeldet. Bei Uploadproblemen die Schreibfreigabe in DSM prüfen.';
+    return 'Heimnetz erkannt · WebDAV erreichbar · Startordner lesbar. ' + write;
   },
   getRemoteEntry: async (path, expectedConfigId) => session(async ({ client, config, signal, assert }) => { if (config.id !== expectedConfigId) throw new Error('Die NAS-Verbindung wurde geändert. Bitte öffne die Aufgabe erneut.'); const entry = await client.stat(safeSegments(path).join('/'), signal); assert(); return entry; }),
 
@@ -319,3 +325,16 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     });
   },
 }));
+
+export async function nasWrite<T>(configId: string, work: (s: Session) => Promise<T>) {
+  const store = useDocumentStore.getState();
+  if (store.config?.id !== configId || store.saving || store.uploading || syncRequest) throw new Error('NAS-Verbindung geändert oder gerade beschäftigt.');
+  const version = revision;
+  useDocumentStore.setState({ uploading: true });
+  try {
+    return await session(async s => {
+      if (s.config.id !== configId) throw new Error('NAS-Verbindung geändert.');
+      const result = await work(s); s.assert(); return result;
+    });
+  } finally { if (version === revision) useDocumentStore.setState({ uploading: false }); }
+}

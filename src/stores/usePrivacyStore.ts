@@ -20,7 +20,7 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
     }).finally(() => { initializing = null; });
     return initializing;
   },
-  lock: () => { if (get().enabled) { lockRevision++; set({ locked: true }); } },
+  lock: () => { lockRevision++; if (get().enabled) set({ locked: true }); },
   unlock: async () => {
     if (!get().initialized || get().busy) return false;
     if (!get().enabled) { set({ locked: false }); return true; }
@@ -36,13 +36,14 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
   },
   setEnabled: async enabled => {
     if (!get().initialized || get().busy) return;
+    const version = lockRevision;
     set({ busy: true, error: null });
     try {
       if (enabled && (!await LocalAuthentication.hasHardwareAsync() || !await LocalAuthentication.isEnrolledAsync())) throw new Error('Richte zuerst Face ID oder Touch ID auf deinem Gerät ein.');
       const result = await LocalAuthentication.authenticateAsync({ promptMessage: enabled ? 'App-Sperre aktivieren' : 'App-Sperre deaktivieren', cancelLabel: 'Abbrechen', disableDeviceFallback: false });
-      if (!result.success) throw new Error('Die Einstellung wurde nicht geändert.');
+      if (!result.success || version !== lockRevision) throw new Error('Die Einstellung wurde nicht geändert.');
       await savePrivacy({ enabled, hideNotificationText: get().hideNotificationText });
-      set({ enabled, locked: false });
+      set({ enabled, locked: enabled && version !== lockRevision });
     } finally { set({ busy: false }); }
   },
   setHideNotificationText: async hideNotificationText => {

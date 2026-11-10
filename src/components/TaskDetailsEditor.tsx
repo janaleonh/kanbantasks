@@ -14,16 +14,11 @@ type Props = {
 };
 export function TaskDetailsEditor(props: Props) {
   const theme = useTheme(), insets = useSafeAreaInsets();
-  const [itemTitle, setItemTitle] = useState(''), [picking, setPicking] = useState(false), [folder, setFolder] = useState('');
+  const [picking, setPicking] = useState(false), [folder, setFolder] = useState('');
   const { config, manifest, browse, loadingFolder, folderError, home } = useDocumentStore();
   const text = { color: theme.text }, muted = { color: theme.subtext, fontSize: 12, lineHeight: 19 };
   const card = { backgroundColor: theme.cardBg, borderRadius: 12, padding: 13 };
   const label = { ...muted, fontWeight: '600' as const, marginBottom: 9 };
-  const addItem = () => {
-    if (!itemTitle.trim()) return;
-    if (props.checklist.length >= 100) { Alert.alert('Checkliste', 'Bis zu 100 Punkte sind möglich.'); return; }
-    props.onChecklist([...props.checklist, { id: generateUUID(), title: itemTitle.trim(), done: false }]); setItemTitle('');
-  };
   const selectFolder = (path: string) => { setFolder(path); void browse(path); };
   return <>
     <View style={{ marginBottom: 20 }}>
@@ -37,15 +32,6 @@ export function TaskDetailsEditor(props: Props) {
         </View>}
         <Text style={[muted, { marginTop: 8 }]}>Beim Erledigen entsteht die nächste Aufgabe. Vergangene Wiederholungen werden übersprungen. Ohne Fälligkeit beginnt die Reihe ab heute.</Text>
       </>}
-    </View>
-    <View style={{ marginBottom: 20 }}>
-      <Text style={label}>CHECKLISTE · {props.checklist.filter(item => item.done).length}/{props.checklist.length}</Text>
-      {props.checklist.map(item => <View key={item.id} style={{ ...card, flexDirection: 'row', alignItems: 'center', gap: 9, marginBottom: 6 }}>
-        <TouchableOpacity accessibilityRole="checkbox" accessibilityState={{ checked: item.done }} accessibilityLabel={item.title} onPress={() => props.onChecklist(props.checklist.map(value => value.id === item.id ? { ...value, done: !value.done } : value))}><Ionicons name={item.done ? 'checkmark-circle' : 'ellipse-outline'} size={24} color={theme.accent} /></TouchableOpacity>
-        <TextInput accessibilityLabel="Checklistenpunkt bearbeiten" maxLength={500} value={item.title} onChangeText={title => props.onChecklist(props.checklist.map(value => value.id === item.id ? { ...value, title } : value))} style={{ flex: 1, ...text, textDecorationLine: item.done ? 'line-through' : 'none' }} />
-        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Checklistenpunkt entfernen" onPress={() => props.onChecklist(props.checklist.filter(value => value.id !== item.id))}><Ionicons name="close" size={20} color={theme.subtext} /></TouchableOpacity>
-      </View>)}
-      <View style={{ ...card, flexDirection: 'row', alignItems: 'center', gap: 8 }}><TextInput accessibilityLabel="Neuer Checklistenpunkt" value={itemTitle} onChangeText={setItemTitle} maxLength={500} placeholder="Schritt hinzufügen" placeholderTextColor={theme.subtext} onSubmitEditing={addItem} style={{ flex: 1, ...text }} /><TouchableOpacity accessibilityRole="button" accessibilityLabel="Checklistenpunkt hinzufügen" onPress={addItem}><Ionicons name="add-circle-outline" size={24} color={theme.accent} /></TouchableOpacity></View>
     </View>
     <View style={{ marginBottom: 20 }}>
       <Text style={label}>DOKUMENTE VOM NAS</Text>
@@ -74,4 +60,28 @@ export function TaskDetailsEditor(props: Props) {
       </View>
     </Modal>
   </>;
+}
+
+export function Subtasks(props: Pick<Props, 'checklist' | 'onChecklist'>) {
+  const theme = useTheme();
+  const [itemTitle, setItemTitle] = useState('');
+  const text = { color: theme.text };
+  const card = { backgroundColor: theme.cardBg, borderRadius: 12, padding: 12 };
+  const label = { color: theme.subtext, marginBottom: 8 };
+  const addItem = () => {
+    if (!itemTitle.trim()) return;
+    if (props.checklist.length >= 100) { Alert.alert('Checkliste', 'Bis zu 100 Punkte sind möglich.'); return; }
+    props.onChecklist([...props.checklist, { id: generateUUID(), title: itemTitle.trim(), done: false }]); setItemTitle('');
+  };
+  return (
+    <View style={{ marginBottom: 20 }}>
+      <Text style={label}>UNTERAUFGABEN · {props.checklist.filter(item => item.done).length}/{props.checklist.length}</Text>
+      {props.checklist.map(item => <View key={item.id} style={{ ...card, flexDirection: 'row', alignItems: 'center', gap: 9, marginBottom: 6 }}>
+        <TouchableOpacity accessibilityRole="checkbox" accessibilityState={{ checked: item.done }} accessibilityLabel={item.title} onPress={() => props.onChecklist(props.checklist.map(value => value.id === item.id ? { ...value, done: !value.done } : value))}><Ionicons name={item.done ? 'checkmark-circle' : 'ellipse-outline'} size={24} color={theme.accent} /></TouchableOpacity>
+        <TextInput accessibilityLabel="Checklistenpunkt bearbeiten" maxLength={500} value={item.title} onChangeText={title => props.onChecklist(props.checklist.map(value => value.id === item.id ? { ...value, title } : value))} style={{ flex: 1, ...text, textDecorationLine: item.done ? 'line-through' : 'none' }} />
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Checklistenpunkt entfernen" onPress={() => props.onChecklist(props.checklist.filter(value => value.id !== item.id))}><Ionicons name="close" size={20} color={theme.subtext} /></TouchableOpacity>
+      </View>)}
+      <View style={{ ...card, flexDirection: 'row', alignItems: 'center', gap: 8 }}><TextInput accessibilityLabel="Neuer Checklistenpunkt" value={itemTitle} onChangeText={setItemTitle} maxLength={500} placeholder="Schritt hinzufügen" placeholderTextColor={theme.subtext} onSubmitEditing={addItem} style={{ flex: 1, ...text }} /><TouchableOpacity accessibilityRole="button" accessibilityLabel="Checklistenpunkt hinzufügen" onPress={addItem}><Ionicons name="add-circle-outline" size={24} color={theme.accent} /></TouchableOpacity></View>
+    </View>
+  );
 }

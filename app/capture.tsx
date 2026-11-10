@@ -9,8 +9,13 @@ import { useKanbanStore } from '../src/stores/useKanbanStore';
 import { captureTask } from '../src/db/taskRepo';
 import { sharedDraft } from '../src/tasks/capture';
 
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { getScans } from '../src/documents/scans';
+
 export default function CaptureScreen() {
-  const { source } = useLocalSearchParams<{ source?: string }>();
+  const { source, scanId } = useLocalSearchParams<{ source?: string; scanId?: string }>();
+  const [due, setDue] = useState<Date | null>(null);
+  const [scanName, setScanName] = useState('');
   const theme = useTheme(), router = useRouter();
   const { taskLists, loadAll, scheduleSync } = useKanbanStore();
   const [title, setTitle] = useState(''), [notes, setNotes] = useState(''), [listId, setListId] = useState<string | null>(null);
@@ -22,6 +27,11 @@ export default function CaptureScreen() {
     void (async () => {
       try {
         await loadAll();
+        if (scanId) {
+          const scan = (await getScans()).find(item => item.id === scanId);
+          if (!scan) throw new Error('Der Scan ist nicht mehr auf diesem Gerät.');
+          if (!canceled) { setTitle(scan.name.replace(/\.pdf$/i, '')); setScanName(scan.name); }
+        }
         if (source === 'share') {
           const payloads = Sharing.getSharedPayloads();
           const draft = sharedDraft(payloads);
@@ -37,7 +47,7 @@ export default function CaptureScreen() {
       } catch (err) { if (!canceled) setError(err instanceof Error ? err.message : 'Die Schnellerfassung konnte nicht geöffnet werden.'); }
     })();
     return () => { canceled = true; };
-  }, [source, loadAll]);
+  }, [source, scanId, loadAll]);
   const clearShare = async () => {
     if (source === 'share') { Sharing.clearSharedPayloads(); await SecureStore.deleteItemAsync('planner_pending_share'); }
   };
@@ -46,7 +56,7 @@ export default function CaptureScreen() {
     saving.current = true; setBusy(true);
     let saved = false;
     try {
-      await captureTask(title, notes, listId, `capture:${receipt.current}`);
+      await captureTask(title, notes, listId, `capture:${receipt.current}`, scanId ? { id: scanId, due: due?.toISOString() ?? null } : undefined);
       saved = true;
       await clearShare(); await loadAll(); scheduleSync(); router.replace('/');
     } catch (err) { Alert.alert(saved ? 'Aufgabe gespeichert' : 'Aufgabe nicht gespeichert', saved ? 'Die Aufgabe ist gespeichert. Der Abschluss der Schnellerfassung hat nicht funktioniert; bei erneutem Speichern wird keine zweite Aufgabe angelegt.' : err instanceof Error ? err.message : 'Bitte versuche es erneut.'); }
@@ -58,6 +68,10 @@ export default function CaptureScreen() {
       {!!error && <Text accessibilityRole="alert" style={{ color: theme.text }}>{error}</Text>}
       {!ready && !error && <ActivityIndicator color={theme.accent} />}
       <TextInput accessibilityLabel="Aufgabentitel" placeholder="Was möchtest du erledigen?" placeholderTextColor={theme.subtext} maxLength={1000} value={title} onChangeText={setTitle} editable={ready && !busy} style={{ padding: 16, fontSize: 20, fontWeight: '600', color: theme.text, backgroundColor: theme.cardBg, borderRadius: 14 }} />
+      {scanId && <View style={{ gap: 10 }}><Text style={{ color: theme.text }}>Beleg · {scanName}</Text>
+        <TouchableOpacity onPress={() => setDue(due ? null : new Date())}><Text style={{ color: theme.accent }}>{due ? 'Fälligkeit entfernen' : 'Fälligkeit hinzufügen'}</Text></TouchableOpacity>
+        {due && <DateTimePicker value={due} mode="date" onValueChange={(_, date) => setDue(date)} />}
+      </View>}
       <TextInput accessibilityLabel="Notizen zur Aufgabe" placeholder="Notiz oder Link" placeholderTextColor={theme.subtext} multiline maxLength={20000} value={notes} onChangeText={setNotes} editable={ready && !busy} style={{ padding: 16, minHeight: 140, textAlignVertical: 'top', color: theme.text, backgroundColor: theme.cardBg, borderRadius: 14 }} />
       <Text style={{ color: theme.subtext }}>LISTE</Text>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 9 }}>

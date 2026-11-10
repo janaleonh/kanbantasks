@@ -4,9 +4,16 @@ import type { NasManifest, DavEntry } from '../documents/types';
 import type { CalendarEvent } from '../calendar/types';
 
 const normalize = (text: string) => text.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('de-DE');
-export function searchPlanner(lists: TaskList[], tasksByList: Record<string, Task[]>, manifest: NasManifest, events: CalendarEvent[], query: string, project?: string, tag?: string) {
+export function searchMatcher(query: string) {
   const terms = normalize(query).trim().split(/\s+/).filter(Boolean);
-  const matches = (text: string) => terms.every(term => normalize(text).includes(term));
+  return (text: string) => {
+    const candidate = normalize(text);
+    return terms.every(term => candidate.includes(term));
+  };
+}
+
+export function searchPlanner(lists: TaskList[], tasksByList: Record<string, Task[]>, manifest: NasManifest, events: CalendarEvent[], query: string, project?: string, tag?: string) {
+  const matches = searchMatcher(query);
   const tasks = lists.filter(list => !list.deletedLocally).flatMap(list => (tasksByList[list.id] || []).filter(task => !task.deletedLocally)
     .filter(task => (!project || task.project === project) && (!tag || task.tags?.includes(tag)))
     .map(task => ({ task, listTitle: list.title })))

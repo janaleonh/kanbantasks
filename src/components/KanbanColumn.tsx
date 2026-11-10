@@ -1,3 +1,4 @@
+import { TodayCycle } from './CycleCalendar';
 import React, { useCallback, useState, useEffect } from 'react';
 import {
   View,
@@ -22,6 +23,7 @@ import { TodayCalendarEvents } from './TodayCalendarEvents';
 import { useTheme } from '../hooks/useTheme';
 
 interface KanbanColumnProps {
+  compose?: {listId:string};
   list: TaskList;
   tasks: Task[];
   layoutMode: BoardLayout;
@@ -36,7 +38,7 @@ interface KanbanColumnProps {
   onLayoutTask?: (listId: string, taskId: string, y: number, height: number) => void;
   onLayoutHeader?: (listId: string, height: number) => void;
   onScrollColumn?: (listId: string, scrollY: number) => void;
-  onAddTask: (listId: string, title: string) => void;
+  onAddTask: (listId: string, title: string) => Promise<void>;
   onToggleTask: (id: string) => void;
   onEditTask: (task: Task) => void;
   onRenameList: (id: string, title: string) => void;
@@ -46,6 +48,7 @@ interface KanbanColumnProps {
 }
 
 export function KanbanColumn({
+  compose,
   list,
   tasks,
   layoutMode,
@@ -87,21 +90,31 @@ export function KanbanColumn({
   const columnColor =
     list.color || COLUMN_PALETTE[list.position % COLUMN_PALETTE.length];
 
-  const isSubmittingTask = React.useRef(false);
-
-  const handleAddTask = useCallback(() => {
-    if (isSubmittingTask.current) return;
-    const trimmed = newTaskTitle.trim();
-    if (trimmed) {
-      isSubmittingTask.current = true;
-      onAddTask(list.id, trimmed);
-    }
-    setNewTaskTitle('');
-    setIsAdding(false);
-    setTimeout(() => {
-      isSubmittingTask.current = false;
-    }, 200);
-  }, [newTaskTitle, list.id, onAddTask]);
+  const bodyScroll = React.useRef<React.ComponentRef<typeof ScrollView>>(null);
+  const editor = React.useRef<React.ComponentRef<typeof TextInput>>(null);
+  const draftTitle = React.useRef('');
+  useEffect(()=>{
+    if(compose){bodyScroll.current?.scrollTo({y:0,animated:false});setIsAdding(true);editor.current?.focus();}
+  },[compose]);
+  const pending = React.useRef(false);
+  const handleAddTask = async (keepOpen:boolean) => {
+    if(pending.current)return;
+    const original=draftTitle.current;
+    const title=original.trim();
+    if(!title){if(!keepOpen)setIsAdding(false);return;}
+    pending.current=true;
+    try {
+      await onAddTask(list.id,title);
+      if(draftTitle.current===original){
+        draftTitle.current='';
+        setNewTaskTitle('');
+        if(!keepOpen)setIsAdding(false);
+      }
+    } catch {
+      setIsAdding(true);
+      editor.current?.focus();
+    } finally {pending.current=false;}
+  };
 
   const handleRename = useCallback(() => {
     const trimmed = editTitle.trim();
@@ -133,6 +146,72 @@ export function KanbanColumn({
 
   const taskContent = (
     <>
+      {isAdding ? (
+        <View
+          style={[
+            styles.addTaskCard,
+            {
+              backgroundColor: theme.isGlass
+                ? theme.isDark
+                  ? 'rgba(255, 255, 255, 0.08)'
+                  : 'rgba(255, 255, 255, 0.70)'
+                : theme.cardBg,
+              borderRadius: theme.cardRadius,
+              borderTopColor: theme.glassBorderBright,
+              borderLeftColor: theme.glassBorderBright,
+              borderRightColor: theme.glassBorderDim,
+              borderBottomColor: theme.glassBorderDim,
+            },
+          ]}
+        >
+          {theme.isGlass && (
+            <BlurView
+              intensity={theme.isDark ? 40 : 60}
+              tint={theme.isDark ? 'dark' : 'light'}
+              style={StyleSheet.absoluteFill}
+            />
+          )}
+          <TextInput
+            style={[styles.addTaskInput, { color: theme.text }]}
+            placeholder="Aufgabe eingeben..."
+            placeholderTextColor={theme.subtext}
+            value={newTaskTitle}
+            ref={editor}
+            onChangeText={value=>{draftTitle.current=value;setNewTaskTitle(value);}}
+            onBlur={()=>handleAddTask(false)}
+            onSubmitEditing={()=>handleAddTask(true)}
+            autoFocus
+            returnKeyType="next"
+            submitBehavior="submit"
+          />
+        </View>
+      ) : (
+        <TouchableOpacity
+          style={[
+            styles.addTaskTrigger,
+            {
+              backgroundColor: theme.isGlass
+                ? theme.isDark
+                  ? 'rgba(255,255,255,0.08)'
+                  : 'rgba(255,255,255,0.45)'
+                : theme.isDark
+                ? columnColor + '18'
+                : '#FFFFFFB8',
+              borderTopColor: theme.glassBorderBright,
+              borderLeftColor: theme.glassBorderBright,
+              borderRightColor: theme.glassBorderDim,
+              borderBottomColor: theme.glassBorderDim,
+            },
+          ]}
+          onPress={() => setIsAdding(true)}
+        >
+          <Ionicons name="add-circle" size={20} color={columnColor} />
+          <Text style={[styles.addTaskTriggerText, { color: theme.text }]}>
+            Aufgabe hinzufügen
+          </Text>
+        </TouchableOpacity>
+      )}
+
       {activeTasks.map((task, idx) => (
         <React.Fragment key={task.id}>
           {isDropTarget && dropInsertIndex === idx && (
@@ -172,72 +251,7 @@ export function KanbanColumn({
         )}
 
       {/* Add Task inline - sleek in-place glass card without buttons */}
-      {list.title.trim().toLocaleLowerCase('de-DE') === 'heute' && <TodayCalendarEvents />}
-      {isAdding ? (
-        <View
-          style={[
-            styles.addTaskCard,
-            {
-              backgroundColor: theme.isGlass
-                ? theme.isDark
-                  ? 'rgba(255, 255, 255, 0.08)'
-                  : 'rgba(255, 255, 255, 0.70)'
-                : theme.cardBg,
-              borderRadius: theme.cardRadius,
-              borderTopColor: theme.glassBorderBright,
-              borderLeftColor: theme.glassBorderBright,
-              borderRightColor: theme.glassBorderDim,
-              borderBottomColor: theme.glassBorderDim,
-            },
-          ]}
-        >
-          {theme.isGlass && (
-            <BlurView
-              intensity={theme.isDark ? 40 : 60}
-              tint={theme.isDark ? 'dark' : 'light'}
-              style={StyleSheet.absoluteFill}
-            />
-          )}
-          <TextInput
-            style={[styles.addTaskInput, { color: theme.text }]}
-            placeholder="Aufgabe eingeben..."
-            placeholderTextColor={theme.subtext}
-            value={newTaskTitle}
-            onChangeText={setNewTaskTitle}
-            onBlur={handleAddTask}
-            onSubmitEditing={handleAddTask}
-            autoFocus
-            returnKeyType="done"
-            blurOnSubmit
-          />
-        </View>
-      ) : (
-        <TouchableOpacity
-          style={[
-            styles.addTaskTrigger,
-            {
-              backgroundColor: theme.isGlass
-                ? theme.isDark
-                  ? 'rgba(255,255,255,0.08)'
-                  : 'rgba(255,255,255,0.45)'
-                : theme.isDark
-                ? columnColor + '18'
-                : '#FFFFFFB8',
-              borderTopColor: theme.glassBorderBright,
-              borderLeftColor: theme.glassBorderBright,
-              borderRightColor: theme.glassBorderDim,
-              borderBottomColor: theme.glassBorderDim,
-            },
-          ]}
-          onPress={() => setIsAdding(true)}
-        >
-          <Ionicons name="add-circle" size={20} color={columnColor} />
-          <Text style={[styles.addTaskTriggerText, { color: theme.text }]}>
-            Aufgabe hinzufügen
-          </Text>
-        </TouchableOpacity>
-      )}
-
+      {list.title.trim().toLocaleLowerCase('de-DE') === 'heute' && <><TodayCycle /><TodayCalendarEvents /></>}
       {/* Collapsible Completed Tasks Section */}
       {completedTasks.length > 0 && (
         <View
@@ -447,7 +461,7 @@ export function KanbanColumn({
       {isVertical ? (
         <View style={styles.taskListContent}>{taskContent}</View>
       ) : (
-        <ScrollView
+        <ScrollView ref={bodyScroll} keyboardShouldPersistTaps="handled"
           style={styles.taskList}
           contentContainerStyle={styles.taskListContent}
           showsVerticalScrollIndicator={false}

@@ -29,7 +29,10 @@ export function parseMultiStatus(xml: string, config: Pick<NasConfig, 'server' |
     const directory = properties.resourcetype && typeof properties.resourcetype === 'object' && 'collection' in properties.resourcetype;
     const size = properties.getcontentlength !== undefined && /^\d+$/.test(String(properties.getcontentlength)) ? Number(properties.getcontentlength) : null;
     const modified = properties.getlastmodified ? new Date(decodeText(properties.getlastmodified)) : null;
+    const rights = properties['current-user-privilege-set'];
+    const grants = array<any>(rights?.privilege);
     result.set(relative, {
+      ...(rights !== undefined && {canCreate:grants.some(g=>g && typeof g==='object' && ['all','write','bind'].some(k=>k in g))}),
       path: relative, name: relative.split('/').at(-1) || 'Dokumente', directory: !!directory,
       size: size !== null && Number.isSafeInteger(size) ? size : null,
       modified: modified && Number.isFinite(modified.getTime()) ? modified.toISOString() : null,
@@ -43,14 +46,14 @@ export function parseMultiStatus(xml: string, config: Pick<NasConfig, 'server' |
 export class WebDavClient {
   constructor(private config: NasConfig, private password: string, private transport: typeof fetch) {}
 
-  private async withResponse<T>(path: string, options: RequestInit, signal: AbortSignal, consume: (response: Response) => Promise<T>): Promise<T> {
+  private async withResponse<T>(path: string, options: RequestInit, signal: AbortSignal, consume: (response: Response) => Promise<T>, directory = false): Promise<T> {
     const controller = new AbortController();
     const abort = () => controller.abort();
     if (signal.aborted) abort();
     signal.addEventListener('abort', abort);
     const timeout = setTimeout(abort, options.method === 'PROPFIND' ? 20000 : 120000);
     try {
-      const response = await this.transport(remoteUrl(this.config, path, options.method === 'PROPFIND' || options.method === 'MKCOL'), {
+      const response = await this.transport(remoteUrl(this.config, path, directory || options.method === 'PROPFIND' || options.method === 'MKCOL'), {
         ...options, redirect: 'error', credentials: 'omit', signal: controller.signal,
         headers: { Authorization: `Basic ${Base64.encode(`${this.config.username}:${this.password}`)}`, ...options.headers },
       });
@@ -74,8 +77,8 @@ export class WebDavClient {
     } finally { clearTimeout(timeout); signal.removeEventListener('abort', abort); }
   }
 
-  async list(path: string, signal: AbortSignal, depth: '0' | '1' = '1') {
-    return this.withResponse(path, { method: 'PROPFIND', headers: { Depth: depth, 'Content-Type': 'application/xml; charset=utf-8' }, body: PROPERTIES }, signal,
+  async list(path: string, signal: AbortSignal, depth: '0' | '1' = '1', permissions=false) {
+    return this.withResponse(path, { method: 'PROPFIND', headers: { Depth: depth, 'Content-Type': 'application/xml; charset=utf-8' }, body: permissions ? PROPERTIES.replace('</d:prop>', '<d:current-user-privilege-set/></d:prop>') : PROPERTIES }, signal,
       async (response) => parseMultiStatus(await response.text(), this.config, path, depth === '0'));
   }
 
@@ -84,6 +87,22 @@ export class WebDavClient {
     const entry = entries.find((entry) => entry.path === path);
     if (!entry) throw new DavError('Die Datei oder der Ordner konnte nicht gelesen werden.', 404);
     return entry;
+  }
+
+  async modify(entry: DavEntry, destination: string | null, signal: AbortSignal) {
+    if (!entry.path || !entry.path.split('/').every(Boolean)) throw new DavError('Der Startordner ist geschützt.');
+    if (destination !== null && (destination === entry.path || destination.startsWith(entry.path + '/'))) throw new DavError('Bitte wähle einen anderen Zielordner.');
+    const headers: Record<string, string> = {};
+    if (entry.etag && !entry.etag.startsWith('W/')) headers['If-Match'] = entry.etag;
+    if (destination !== null) {
+      headers.Destination = remoteUrl(this.config, destination, entry.directory);
+      headers.Overwrite = 'F';
+      headers.Depth = entry.directory ? 'infinity' : '0';
+    }
+    await this.withResponse(entry.path, { method: destination === null ? 'DELETE' : 'COPY', headers }, signal, async response => {
+      if (![200, 201, 204].includes(response.status)) throw new DavError('Das NAS hat den Vorgang nicht vollständig bestätigt.');
+      await response.body?.cancel();
+    }, entry.directory);
   }
 
   async ensureDirectory(path: string, signal: AbortSignal) {
@@ -95,15 +114,15 @@ export class WebDavClient {
     }
   }
 
-  async upload(folder: string, source: UploadSource, signal: AbortSignal) {
+  async upload(folder: string, source: UploadSource, signal: AbortSignal, previousEtag?: string) {
     validateUpload(source);
     const path = uploadPath(folder, source.name);
     if (signal.aborted) throw new DavError('Der Upload wurde beendet.');
     await this.withResponse(path, {
       method: 'PUT', body: source.body,
-      headers: { 'Content-Type': 'application/octet-stream', 'If-None-Match': '*' },
+      headers: { 'Content-Type': 'application/octet-stream', ...(previousEtag ? { 'If-Match': previousEtag } : { 'If-None-Match': '*' }) },
     }, signal, async (response) => {
-      if (response.status !== 201) throw new DavError('Das NAS hat die Neuanlage nicht eindeutig bestätigt. Bitte prüfe den Zielordner vor einem weiteren Upload.');
+      if (!(previousEtag ? [200, 204].includes(response.status) : response.status === 201)) throw new DavError('Das NAS hat die Neuanlage nicht eindeutig bestätigt. Bitte prüfe den Zielordner vor einem weiteren Upload.');
       await response.body?.cancel();
     });
     return path;

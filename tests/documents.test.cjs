@@ -412,3 +412,31 @@ test('open previews keep their old file until preview and sharing leases are rel
   assert.throws(() => storage.cachedFile(config.id, '../outside'));
   assert.throws(() => storage.cachedFile(config.id, '11111111-1111-4111-8111-111111111111/%2e%2e'));
 });
+
+test('folder operations protect the root, prevent recursive copies and refuse overwrite', async () => {
+  const calls = [];
+  const client = new WebDavClient(config, 'test', async (url, options) => {
+    calls.push({ url, options }); return new Response(null, { status: 204 });
+  });
+  const signal = new AbortController().signal;
+  const folder = entry('Belege', { directory: true });
+  await assert.rejects(client.modify({ ...folder, path: '' }, null, signal));
+  await assert.rejects(client.modify(folder, 'Belege/Belege', signal));
+  assert.equal(calls.length, 0);
+  await client.modify(folder, 'Archiv/Belege', signal);
+  assert.equal(calls[0].options.headers.Overwrite, 'F');
+  assert.ok(calls[0].options.headers.Destination.endsWith('/Archiv/Belege/'));
+  await client.modify(folder, null, signal);
+  assert.equal(calls[1].options.method, 'DELETE');
+  assert.ok(calls[1].url.endsWith('/Belege/'));
+});
+
+test('NAS diagnostic distinguishes reported create permission from unavailable privilege information', () => {
+  const base=multistatus([entry('',{directory:true})]);
+  const inspect=xml=>parseMultiStatus(xml,config,'',true)[0].canCreate;
+  assert.equal(inspect(base),undefined);
+  for(const [grant,expected] of [['read',false],['bind',true],['write',true]]){
+    const prop='<D:current-user-privilege-set><D:privilege><D:'+grant+'/></D:privilege></D:current-user-privilege-set>';
+    assert.equal(inspect(base.replace('</D:prop>',prop+'</D:prop>')),expected);
+  }
+});

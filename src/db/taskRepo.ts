@@ -329,7 +329,7 @@ export async function materializeCompletedRepeats() {
   return created;
 }
 
-export async function captureTask(title: string, notes: string, listId: string | null, receiptId: string) {
+export async function captureTask(title: string, notes: string, listId: string | null, receiptId: string, scan?: { id: string; due: string | null }, sourceNoteId?: string) {
   if (!title.trim() || title.length > 1000 || notes.length > 20000 || !receiptId || receiptId.length > 200) throw new Error('Bitte gib einen gültigen Aufgabentitel ein.');
   const db = await getDatabase();
   let taskId = '';
@@ -345,6 +345,15 @@ export async function captureTask(title: string, notes: string, listId: string |
     }
     taskId = generateUUID();
     await transaction.runAsync("INSERT INTO tasks (id, listId, title, notes, status, priority, localPosition, updatedAt, syncStatus, deletedLocally) VALUES (?, ?, ?, ?, 'needsAction', 'none', 0, ?, 'pending', 0)", [taskId, target.id, title.trim(), notes, now]);
+    if (scan) {
+      if (!await transaction.getFirstAsync('SELECT id FROM scans WHERE id = ?', [scan.id])) throw new Error('Der Scan ist nicht mehr auf diesem Gerät.');
+      await transaction.runAsync('INSERT INTO scan_tasks (taskId, scanId) VALUES (?, ?)', [taskId, scan.id]);
+      if (scan.due) await transaction.runAsync('UPDATE tasks SET due = ? WHERE id = ?', [scan.due, taskId]);
+    }
+    if (sourceNoteId) {
+      const link = await transaction.runAsync("INSERT INTO note_tasks (taskId,noteId) SELECT ?, id FROM notes WHERE id=? AND state!='trash'", [taskId,sourceNoteId]);
+      if (!link.changes) throw new Error('Die ursprüngliche Notiz ist nicht mehr verfügbar.');
+    }
     await transaction.runAsync('INSERT INTO capture_receipts (id, taskId) VALUES (?, ?)', [receiptId, taskId]);
   });
   return taskId;

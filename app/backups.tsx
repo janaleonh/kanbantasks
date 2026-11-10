@@ -8,6 +8,8 @@ import { useBackupStore } from '../src/stores/useBackupStore';
 import { useDocumentStore } from '../src/stores/useDocumentStore';
 import { MAX_BACKUP_BYTES, type BackupData } from '../src/backup/format';
 
+import { collectBackup } from '../src/backup/database';
+
 export default function BackupsScreen() {
   const theme = useTheme(), backup = useBackupStore();
   const { config, home } = useDocumentStore();
@@ -28,6 +30,15 @@ export default function BackupsScreen() {
     } catch (err) { error(err); }
     finally { try { if (file?.exists) file.delete(); } catch {} setReading(false); }
   };
+  const confirmBackup = async () => {
+    setReading(true);
+    try {
+      const data = await collectBackup();
+      Alert.alert('Inhalt der Sicherung', data.lists.length + ' Listen · ' + data.tasks.length + ' Aufgaben, einschließlich Checklisten und Aufgaben-Metadaten. Separat sichern: Notizen, Anhänge, Scans und NAS-Dateien. Kalender und Zyklusdaten sind ebenfalls nicht enthalten.', [
+        {text:'Abbrechen',style:'cancel'}, {text:'Auf NAS sichern',onPress:()=>void backup.createBackup().then(()=>backup.refreshFiles()).catch(error)}
+      ]);
+    } catch (err) {error(err);} finally {setReading(false);}
+  };
   const restore = () => {
     if (!preview) return;
     Alert.alert('Sicherung als neue Listen übernehmen?', `${preview.lists.length} Listen und ${preview.tasks.length} Aufgaben werden zusätzlich angelegt. Vorhandene Aufgaben bleiben erhalten. Neue Listen werden anschließend mit dem zugehörigen Google-Konto synchronisiert.`, [
@@ -42,7 +53,7 @@ export default function BackupsScreen() {
       <Text style={{ color: theme.subtext, lineHeight: 20, fontSize: 13, marginTop: 10 }}>Ziel: {config ? `${config.root.replace(/\/$/, '')}/Planner-Backups` : 'Zuerst ein NAS verbinden'}. Sicherungen werden als neue JSON-Dateien gespeichert und zur Prüfung zurückgelesen. Sie sind auf dem NAS nicht zusätzlich verschlüsselt.</Text>
       {backup.lastAt && <Text style={{ color: theme.subtext, fontSize: 12, marginTop: 10 }}>Letzte bestätigte Sicherung: {new Date(backup.lastAt).toLocaleString('de-DE')}</Text>}
       {!!backup.error && <Text accessibilityRole="alert" style={{ color: theme.subtext, marginTop: 12 }}>{backup.error}</Text>}
-      {button('Jetzt auf dem NAS sichern', () => { void backup.createBackup().then(() => backup.refreshFiles()).catch(error); }, !config || !home)}
+      {button('Jetzt auf dem NAS sichern', () => void confirmBackup(), !config || !home)}
       {button('Sicherungen vom NAS laden', () => { void backup.refreshFiles().catch(error); }, !config || !home)}
       {button('Sicherungsdatei vom iPhone öffnen', () => { void local(); })}
       {(backup.busy || reading) && <ActivityIndicator color={theme.accent} style={{ marginTop: 15 }} />}

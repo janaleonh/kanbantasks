@@ -10,12 +10,13 @@ import { useDocumentStore } from '../src/stores/useDocumentStore';
 import type { DavEntry } from '../src/documents/types';
 import { formatBytes } from '../src/documents/paths';
 import { useTheme } from '../src/hooks/useTheme';
+import { ProjectAssignment, projectItems } from '../src/components/ProjectAssignment';
 import { getTaskById } from '../src/db/taskRepo';
 
 type Lease = Awaited<ReturnType<ReturnType<typeof useDocumentStore.getState>['openFile']>>;
 
 export default function DocumentScreen() {
-  const { path, taskId } = useLocalSearchParams<{ path: string; taskId?: string }>();
+  const { path, taskId, projectOwner } = useLocalSearchParams<{ path: string; taskId?: string; projectOwner?:string }>();
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const configId = useDocumentStore((state) => state.config?.id);
@@ -36,12 +37,16 @@ export default function DocumentScreen() {
     void (async () => {
       try {
         const state = useDocumentStore.getState();
+        if(projectOwner && state.config?.id!==projectOwner)throw new Error('Bitte verbinde das zugehörige NAS.');
         const favorite = state.manifest.favorites.find((favorite) => favorite.path === path && !favorite.directory);
         let found = state.manifest.offline[path]?.entry || Object.values(state.manifest.folders).flatMap((folder) => folder.entries).find((entry) => entry.path === path && !entry.directory) || (favorite ? { ...favorite, size: null, modified: null, etag: null, mimeType: 'application/octet-stream' } : null);
         if (!found && taskId && state.config) {
           const task = await getTaskById(taskId);
           const attached = !task?.deletedLocally && task?.attachments?.find(attachment => attachment.configId === state.config!.id && attachment.path === path);
           if (attached && !closed) found = await state.getRemoteEntry(path, attached.configId);
+        }
+        if(!found && projectOwner && state.config?.id===projectOwner && (await projectItems(projectOwner)).some(p=>p.kind==='document' && p.item===path)){
+          found=await state.getRemoteEntry(path,projectOwner);
         }
         if (!state.config || !found) throw new Error('Dieses Dokument ist nicht mehr in deiner Dokumentenliste. Bitte öffne es erneut über den Explorer.');
         if (closed) return;
@@ -67,7 +72,7 @@ export default function DocumentScreen() {
       finally { if (!closed) setLoading(false); }
     })();
     return () => { closed = true; current?.release(); if (lease.current === current) lease.current = null; };
-  }, [path, taskId, configId, initialized]);
+  }, [path, taskId, configId, initialized, projectOwner]);
   const share = async () => {
     if (!uri || sharing || !lease.current) return;
     let release: (() => void) | undefined;
@@ -86,6 +91,7 @@ export default function DocumentScreen() {
     <Stack.Screen options={{ headerTitle: entry?.name || 'Dokument' }} />
     {loading ? <View style={styles.center}><ActivityIndicator color={theme.accent} size="large" /><Text style={[styles.description, { color: theme.subtext }]}>Dokument wird geöffnet …</Text></View> : error ? <View style={styles.center}><Ionicons name="document-outline" size={40} color={theme.accent} /><Text accessibilityRole="alert" style={[styles.description, { color: theme.text }]}>{error}</Text></View> : uri && kind === 'pdf' ? <WebView source={{ uri }} style={{ flex: 1, backgroundColor: theme.background }} originWhitelist={['file://*']} allowingReadAccessToURL={uri.slice(0, uri.lastIndexOf('/') + 1)} javaScriptEnabled={false} domStorageEnabled={false} sharedCookiesEnabled={false} allowUniversalAccessFromFileURLs={false} onShouldStartLoadWithRequest={(request) => sameLocalFile(request.url) || request.url === 'about:blank'} onError={() => { setKind('other'); }} /> : uri && kind === 'image' ? <Image accessibilityLabel={entry?.name} source={{ uri }} style={{ flex: 1 }} resizeMode="contain" onError={() => setKind('other')} /> : kind === 'text' ? <ScrollView contentContainerStyle={styles.textContent}><Text selectable style={[styles.text, { color: theme.text }]}>{text}</Text></ScrollView> : <View style={styles.center}><Ionicons name="document-text-outline" size={48} color={theme.accent} /><Text style={[styles.name, { color: theme.text }]}>{entry?.name}</Text><Text style={[styles.description, { color: theme.subtext }]}>Öffne dieses Dokument in einer passenden App oder sichere eine Kopie über das Teilen-Menü.</Text></View>}
     {!!uri && !loading && <View style={[styles.footer, { borderTopColor: theme.border, paddingBottom: insets.bottom + 12 }]}>
+      {configId && <ProjectAssignment kind="document" owner={configId} item={path}/>}
       <Text style={[styles.detail, { color: theme.subtext }]}>{entry?.name} · {formatBytes(entry?.size ?? null)}</Text>
       <TouchableOpacity accessibilityRole="button" disabled={sharing} onPress={() => { void share(); }} style={[styles.button, { backgroundColor: theme.accent }]}>{sharing ? <ActivityIndicator color={theme.onAccent ?? '#FFFFFF'} /> : <Ionicons name="share-outline" size={20} color={theme.onAccent ?? '#FFFFFF'} />}<Text style={{ color: theme.onAccent ?? '#FFFFFF', fontWeight: '700' }}>Öffnen / Teilen</Text></TouchableOpacity>
     </View>}

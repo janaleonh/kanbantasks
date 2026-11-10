@@ -24,6 +24,15 @@ test('widgets exclude hidden lists, deleted tasks, and completed tasks', () => {
   assert.equal(data.today.count, 0);
 });
 
+test('undated tasks in the visible Heute column count today even without a Google due date', () => {
+  const data = buildWidgetSnapshots([{ ...lists[0], title: ' Heute ' }], {
+    work: [task('Ohne Datum'), task('Später', { due: '2030-01-01' })],
+  }, new Date(2026, 10, 7));
+  assert.deepEqual(data.today.tasks.map(t => t.title), ['Ohne Datum']);
+  assert.equal(data.today.overdue, 0);
+  assert.equal(data.overview.count, 2);
+});
+
 test('today includes overdue tasks, sorts by due date, and rolls over at local midnight', () => {
   const now = new Date(2026, 10, 1, 23, 59);
   const data = { work: [

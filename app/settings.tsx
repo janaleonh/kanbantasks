@@ -11,7 +11,7 @@ import {
   Switch,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import { useNetworkStatus } from '../src/hooks/useNetworkStatus';
 import {
   useGoogleAuth,
@@ -222,148 +222,7 @@ export default function SettingsScreen() {
       style={[styles.container, { backgroundColor: theme.background }]}
       contentContainerStyle={styles.content}
     >
-      {/* Account & Sync Section */}
-      <View style={styles.section}>
-        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>
-          KONTO & SYNCHRONISIERUNG
-        </Text>
-        {user ? (
-          <View
-            style={[
-              styles.row,
-              { backgroundColor: theme.cardBg, borderColor: theme.border },
-            ]}
-          >
-            <View style={styles.rowLeft}>
-              <Ionicons
-                name="person-circle-outline"
-                size={28}
-                color="#34C759"
-              />
-              <View>
-                <Text style={[styles.rowTitle, { color: theme.text }]}>
-                  {user.name}
-                </Text>
-                <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
-                  {user.email}
-                </Text>
-              </View>
-            </View>
-            <TouchableOpacity onPress={handleSignOut}>
-              <Text style={styles.signOutText}>Trennen</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <TouchableOpacity
-            style={[
-              styles.row,
-              { backgroundColor: theme.cardBg, borderColor: theme.border },
-            ]}
-            onPress={handleSignIn}
-            disabled={!request || authLoading}
-          >
-            <View style={styles.rowLeft}>
-              <Ionicons name="logo-google" size={22} color="#4285F4" />
-              <View>
-                <Text style={[styles.rowTitle, { color: theme.text }]}>
-                  Mit Google anmelden
-                </Text>
-                <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
-                  Für automatischen Sync mit Google Tasks
-                </Text>
-              </View>
-            </View>
-            {authLoading ? (
-              <ActivityIndicator size="small" color="#007AFF" />
-            ) : (
-              <Ionicons name="chevron-forward" size={20} color={theme.subtext} />
-            )}
-          </TouchableOpacity>
-        )}
-
-        <TouchableOpacity
-          style={[
-            styles.row,
-            { backgroundColor: theme.cardBg, borderColor: theme.border },
-          ]}
-          onPress={syncWithGoogle}
-          disabled={!user || !isConnected || syncState === 'syncing'}
-        >
-          <View style={styles.rowLeft}>
-            <Ionicons name="sync-outline" size={22} color={theme.accent} />
-            <View>
-              <Text style={[styles.rowTitle, { color: theme.text }]}>
-                Jetzt synchronisieren
-              </Text>
-              <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
-                {lastSyncedAt
-                  ? `Zuletzt: ${new Date(lastSyncedAt).toLocaleTimeString(
-                      'de-DE'
-                    )}`
-                  : 'Noch nicht synchronisiert'}
-              </Text>
-            </View>
-          </View>
-          {syncState === 'syncing' ? (
-            <ActivityIndicator size="small" color="#007AFF" />
-          ) : (
-            <Ionicons name="chevron-forward" size={20} color={theme.subtext} />
-          )}
-        </TouchableOpacity>
-        {/* Auto-Sync Inactivity Delay */}
-        <View
-          style={[
-            styles.row,
-            styles.choiceRow,
-            { backgroundColor: theme.cardBg, borderColor: theme.border },
-          ]}
-        >
-          <View style={[styles.rowLeft, styles.choiceLabel]}>
-            <Ionicons name="timer-outline" size={22} color="#34C759" />
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.rowTitle, { color: theme.text }]}>
-                Auto-Sync nach Ruhezeit
-              </Text>
-              <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
-                Synct erst, wenn solange nichts geändert wurde
-              </Text>
-            </View>
-          </View>
-          <View style={styles.themeSegments}>
-            {[
-              { sec: 10, label: '10s' },
-              { sec: 60, label: '1m' },
-              { sec: 300, label: '5m' },
-              { sec: 0, label: 'Aus' },
-            ].map((opt) => {
-              const active = autoSyncDelaySeconds === opt.sec;
-              return (
-                <TouchableOpacity
-                  key={opt.sec}
-                  style={[
-                    styles.themeButton,
-                    active && [
-                      styles.themeButtonActive,
-                      { backgroundColor: theme.accent },
-                    ],
-                  ]}
-                  onPress={() => setAutoSyncDelaySeconds(opt.sec)}
-                >
-                  <Text
-                    style={[
-                      styles.themeButtonText,
-                      { color: active ? (theme.onAccent ?? '#FFFFFF') : theme.subtext },
-                    ]}
-                  >
-                    {opt.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
-      </View>
-
+      <Stack.Screen options={{headerTitle:'Einstellungen'}}/>
       <View style={styles.calendarSection}>
         <CalendarPreferences onConnect={handleSignIn} connecting={authLoading || !request} />
       </View>
@@ -380,6 +239,62 @@ export default function SettingsScreen() {
         <Text style={[styles.sectionTitle, { color: theme.subtext }]}>SICHERN & SCANNEN</Text>
         {([{ title: 'Backups & Wiederherstellen', subtitle: 'Automatisch zu Hause aufs NAS sichern', route: '/backups', icon: 'save-outline' }, { title: 'Dokument scannen', subtitle: 'Mehrseitige PDF aufnehmen und hochladen', route: '/scan', icon: 'scan-outline' }] as const).map(item => <TouchableOpacity key={item.route} accessibilityRole="button" onPress={() => router.push(item.route)} style={[styles.row, { backgroundColor: theme.cardBg, borderColor: theme.border }]}><View style={styles.rowLeft}><Ionicons name={item.icon} size={22} color={theme.accent} /><View style={{ flex: 1 }}><Text style={[styles.rowTitle, { color: theme.text }]}>{item.title}</Text><Text style={[styles.rowSubtitle, { color: theme.subtext }]}>{item.subtitle}</Text></View></View><Ionicons name="chevron-forward" size={20} color={theme.subtext} /></TouchableOpacity>)}
       </View>
+
+      {/* iPhone Push Notifications */}
+      <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>
+          MITTEILUNGEN
+        </Text>
+        <View
+          style={[
+            styles.row,
+            { backgroundColor: theme.cardBg, borderColor: theme.border },
+          ]}
+        >
+          <View style={styles.rowLeft}>
+            <Ionicons name="notifications-outline" size={22} color="#FF3B30" />
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.rowTitle, { color: theme.text }]}>
+                Täglicher Überblick (08:30 Uhr)
+              </Text>
+              <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
+                Offene Aufgaben und Termine deiner ausgewählten Kalender. Für 14 Tage vorgeplant und bei App-Nutzung aktualisiert.
+              </Text>
+            </View>
+          </View>
+          <Switch
+            value={dailyBriefingEnabled}
+            onValueChange={setDailyBriefingEnabled}
+            trackColor={{ false: '#D1D1D6', true: '#34C759' }}
+          />
+        </View>
+
+        <Text accessibilityRole={briefingStatus.error ? 'alert' : undefined} style={{ color: theme.subtext, fontSize: 12, lineHeight: 19, marginBottom: 12 }}>{briefingStatus.message}</Text>
+
+        <TouchableOpacity
+          style={[
+            styles.row,
+            { backgroundColor: theme.cardBg, borderColor: theme.border },
+          ]}
+          onPress={handleTestNotification}
+        >
+          <View style={styles.rowLeft}>
+            <Ionicons name="paper-plane-outline" size={22} color={theme.accent} />
+            <View>
+              <Text style={[styles.rowTitle, { color: theme.text }]}>
+                Tagesübersicht als Test senden
+              </Text>
+              <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
+                Prüft, ob Banner & Ton sofort funktionieren
+              </Text>
+            </View>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={theme.subtext} />
+        </TouchableOpacity>
+      </View>
+
+      <WidgetPreferences />
+      <PrivacyPreferences />
       {/* Board Layout & Appearance */}
       <View style={styles.section}>
         <Text style={[styles.sectionTitle, { color: theme.subtext }]}>
@@ -596,9 +511,233 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+      </View>
+
+      {/* Design Preset Selector */}
+      <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>
+          ERSCHEINUNGSBILD
+        </Text>
+        {/* Theme Mode Picker */}
+        <View
+          style={[
+            styles.row,
+            styles.choiceRow,
+            { backgroundColor: theme.cardBg, borderColor: theme.border },
+          ]}
+        >
+          <View style={[styles.rowLeft, styles.choiceLabel]}>
+            <Ionicons name="contrast-outline" size={22} color="#FF9500" />
+            <Text style={[styles.rowTitle, { color: theme.text }]}>
+              Hell / Dunkel
+            </Text>
+          </View>
+          <View style={styles.themeSegments}>
+            {(['system', 'light', 'dark'] as ThemeMode[]).map((mode) => {
+              const active = themeMode === mode;
+              return (
+                <TouchableOpacity
+                  key={mode}
+                  style={[
+                    styles.themeButton,
+                    active && [
+                      styles.themeButtonActive,
+                      { backgroundColor: theme.accent },
+                    ],
+                  ]}
+                  onPress={() => setThemeMode(mode)}
+                >
+                  <Text
+                    style={[
+                      styles.themeButtonText,
+                      { color: active ? (theme.onAccent ?? '#FFFFFF') : theme.subtext },
+                    ]}
+                  >
+                    {mode === 'system'
+                      ? 'Auto'
+                      : mode === 'light'
+                      ? 'Hell'
+                      : 'Dunkel'}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+        <View style={styles.designGallery}><DesignGallery /></View>
+        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>WEITERE STILE</Text>
+        {DESIGN_PRESETS.map((p) => {
+          const isSelected = designPreset === p.id;
+          return (
+            <TouchableOpacity
+              key={p.id}
+              onPress={() => setDesignPreset(p.id)}
+              style={[
+                styles.row,
+                { backgroundColor: theme.cardBg, borderColor: theme.border },
+              ]}
+            >
+              <View style={styles.rowLeft}>
+                <Ionicons
+                  name={isSelected ? 'checkmark-circle' : 'ellipse-outline'}
+                  size={22}
+                  color={isSelected ? theme.accent : theme.subtext}
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.rowTitle, { color: theme.text }]}>
+                    {p.name}
+                  </Text>
+                  <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
+                    {p.desc}
+                  </Text>
+                </View>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
 
 
+      {/* Account & Sync Section */}
+      <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>
+          KONTO & SYNCHRONISIERUNG
+        </Text>
+        {user ? (
+          <View
+            style={[
+              styles.row,
+              { backgroundColor: theme.cardBg, borderColor: theme.border },
+            ]}
+          >
+            <View style={styles.rowLeft}>
+              <Ionicons
+                name="person-circle-outline"
+                size={28}
+                color="#34C759"
+              />
+              <View>
+                <Text style={[styles.rowTitle, { color: theme.text }]}>
+                  {user.name}
+                </Text>
+                <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
+                  {user.email}
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity onPress={handleSignOut}>
+              <Text style={styles.signOutText}>Trennen</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <TouchableOpacity
+            style={[
+              styles.row,
+              { backgroundColor: theme.cardBg, borderColor: theme.border },
+            ]}
+            onPress={handleSignIn}
+            disabled={!request || authLoading}
+          >
+            <View style={styles.rowLeft}>
+              <Ionicons name="logo-google" size={22} color="#4285F4" />
+              <View>
+                <Text style={[styles.rowTitle, { color: theme.text }]}>
+                  Mit Google anmelden
+                </Text>
+                <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
+                  Für automatischen Sync mit Google Tasks
+                </Text>
+              </View>
+            </View>
+            {authLoading ? (
+              <ActivityIndicator size="small" color="#007AFF" />
+            ) : (
+              <Ionicons name="chevron-forward" size={20} color={theme.subtext} />
+            )}
+          </TouchableOpacity>
+        )}
 
+        <TouchableOpacity
+          style={[
+            styles.row,
+            { backgroundColor: theme.cardBg, borderColor: theme.border },
+          ]}
+          onPress={syncWithGoogle}
+          disabled={!user || !isConnected || syncState === 'syncing'}
+        >
+          <View style={styles.rowLeft}>
+            <Ionicons name="sync-outline" size={22} color={theme.accent} />
+            <View>
+              <Text style={[styles.rowTitle, { color: theme.text }]}>
+                Jetzt synchronisieren
+              </Text>
+              <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
+                {lastSyncedAt
+                  ? `Zuletzt: ${new Date(lastSyncedAt).toLocaleTimeString(
+                      'de-DE'
+                    )}`
+                  : 'Noch nicht synchronisiert'}
+              </Text>
+            </View>
+          </View>
+          {syncState === 'syncing' ? (
+            <ActivityIndicator size="small" color="#007AFF" />
+          ) : (
+            <Ionicons name="chevron-forward" size={20} color={theme.subtext} />
+          )}
+        </TouchableOpacity>
+        {/* Auto-Sync Inactivity Delay */}
+        <View
+          style={[
+            styles.row,
+            styles.choiceRow,
+            { backgroundColor: theme.cardBg, borderColor: theme.border },
+          ]}
+        >
+          <View style={[styles.rowLeft, styles.choiceLabel]}>
+            <Ionicons name="timer-outline" size={22} color="#34C759" />
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.rowTitle, { color: theme.text }]}>
+                Auto-Sync nach Ruhezeit
+              </Text>
+              <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
+                Synct erst, wenn solange nichts geändert wurde
+              </Text>
+            </View>
+          </View>
+          <View style={styles.themeSegments}>
+            {[
+              { sec: 10, label: '10s' },
+              { sec: 60, label: '1m' },
+              { sec: 300, label: '5m' },
+              { sec: 0, label: 'Aus' },
+            ].map((opt) => {
+              const active = autoSyncDelaySeconds === opt.sec;
+              return (
+                <TouchableOpacity
+                  key={opt.sec}
+                  style={[
+                    styles.themeButton,
+                    active && [
+                      styles.themeButtonActive,
+                      { backgroundColor: theme.accent },
+                    ],
+                  ]}
+                  onPress={() => setAutoSyncDelaySeconds(opt.sec)}
+                >
+                  <Text
+                    style={[
+                      styles.themeButtonText,
+                      { color: active ? (theme.onAccent ?? '#FFFFFF') : theme.subtext },
+                    ]}
+                  >
+                    {opt.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
       </View>
 
       {/* Lists Visibility Selection */}
@@ -688,151 +827,8 @@ export default function SettingsScreen() {
         )}
       </View>
 
-      {/* Design Preset Selector */}
       <View style={styles.section}>
-        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>
-          ERSCHEINUNGSBILD
-        </Text>
-        {/* Theme Mode Picker */}
-        <View
-          style={[
-            styles.row,
-            styles.choiceRow,
-            { backgroundColor: theme.cardBg, borderColor: theme.border },
-          ]}
-        >
-          <View style={[styles.rowLeft, styles.choiceLabel]}>
-            <Ionicons name="contrast-outline" size={22} color="#FF9500" />
-            <Text style={[styles.rowTitle, { color: theme.text }]}>
-              Hell / Dunkel
-            </Text>
-          </View>
-          <View style={styles.themeSegments}>
-            {(['system', 'light', 'dark'] as ThemeMode[]).map((mode) => {
-              const active = themeMode === mode;
-              return (
-                <TouchableOpacity
-                  key={mode}
-                  style={[
-                    styles.themeButton,
-                    active && [
-                      styles.themeButtonActive,
-                      { backgroundColor: theme.accent },
-                    ],
-                  ]}
-                  onPress={() => setThemeMode(mode)}
-                >
-                  <Text
-                    style={[
-                      styles.themeButtonText,
-                      { color: active ? (theme.onAccent ?? '#FFFFFF') : theme.subtext },
-                    ]}
-                  >
-                    {mode === 'system'
-                      ? 'Auto'
-                      : mode === 'light'
-                      ? 'Hell'
-                      : 'Dunkel'}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
-        <View style={styles.designGallery}><DesignGallery /></View>
-        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>WEITERE STILE</Text>
-        {DESIGN_PRESETS.map((p) => {
-          const isSelected = designPreset === p.id;
-          return (
-            <TouchableOpacity
-              key={p.id}
-              onPress={() => setDesignPreset(p.id)}
-              style={[
-                styles.row,
-                { backgroundColor: theme.cardBg, borderColor: theme.border },
-              ]}
-            >
-              <View style={styles.rowLeft}>
-                <Ionicons
-                  name={isSelected ? 'checkmark-circle' : 'ellipse-outline'}
-                  size={22}
-                  color={isSelected ? theme.accent : theme.subtext}
-                />
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.rowTitle, { color: theme.text }]}>
-                    {p.name}
-                  </Text>
-                  <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
-                    {p.desc}
-                  </Text>
-                </View>
-              </View>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-
-      {/* iPhone Push Notifications */}
-      <View style={styles.section}>
-        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>
-          MITTEILUNGEN
-        </Text>
-        <View
-          style={[
-            styles.row,
-            { backgroundColor: theme.cardBg, borderColor: theme.border },
-          ]}
-        >
-          <View style={styles.rowLeft}>
-            <Ionicons name="notifications-outline" size={22} color="#FF3B30" />
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.rowTitle, { color: theme.text }]}>
-                Täglicher Überblick (08:30 Uhr)
-              </Text>
-              <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
-                Offene Aufgaben und Termine deiner ausgewählten Kalender. Für 14 Tage vorgeplant und bei App-Nutzung aktualisiert.
-              </Text>
-            </View>
-          </View>
-          <Switch
-            value={dailyBriefingEnabled}
-            onValueChange={setDailyBriefingEnabled}
-            trackColor={{ false: '#D1D1D6', true: '#34C759' }}
-          />
-        </View>
-
-        <Text accessibilityRole={briefingStatus.error ? 'alert' : undefined} style={{ color: theme.subtext, fontSize: 12, lineHeight: 19, marginBottom: 12 }}>{briefingStatus.message}</Text>
-
-        <TouchableOpacity
-          style={[
-            styles.row,
-            { backgroundColor: theme.cardBg, borderColor: theme.border },
-          ]}
-          onPress={handleTestNotification}
-        >
-          <View style={styles.rowLeft}>
-            <Ionicons name="paper-plane-outline" size={22} color={theme.accent} />
-            <View>
-              <Text style={[styles.rowTitle, { color: theme.text }]}>
-                Tagesübersicht als Test senden
-              </Text>
-              <Text style={[styles.rowSubtitle, { color: theme.subtext }]}>
-                Prüft, ob Banner & Ton sofort funktionieren
-              </Text>
-            </View>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color={theme.subtext} />
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.section}>
-        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>SCHNELLERFASSUNG & SIRI</Text>
         <CapturePreferences />
-        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>DATENSCHUTZ & APP-SPERRE</Text>
-        <PrivacyPreferences />
-        <Text style={[styles.sectionTitle, { color: theme.subtext }]}>WIDGETS</Text>
-        <WidgetPreferences />
-
         <Text style={[styles.sectionTitle, { color: theme.subtext }]}>BEDIENUNG</Text>
         {/* Task Completion Tip */}
         <View

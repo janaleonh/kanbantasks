@@ -1,8 +1,10 @@
+import { createContext, useContext } from 'react';
 import { useColorScheme } from 'react-native';
 import { useKanbanStore } from '../stores/useKanbanStore';
 import { getNewDesign } from '../designs/presets';
 
-export type DesignPreset = 'apple' | 'things' | 'linear' | 'oled' | 'studio' | 'paper' | 'midnight';
+export const ThemeArea=createContext<'board'|'calendar'|'notes'|'documents'>('board');
+export type DesignPreset = 'apple' | 'things' | 'linear' | 'oled' | 'studio' | 'paper' | 'midnight' | 'contrast';
 
 export interface ThemeColors {
   isDark: boolean;
@@ -37,6 +39,7 @@ export interface ThemeColors {
 }
 
 export function useTheme(): ThemeColors {
+  const area=useContext(ThemeArea);
   const systemScheme = useColorScheme();
   const themeMode = useKanbanStore((s) => s.themeMode);
   const designPreset = useKanbanStore((s) => s.designPreset);
@@ -46,7 +49,7 @@ export function useTheme(): ThemeColors {
     themeMode === 'dark' ||
     (themeMode === 'system' && systemScheme === 'dark');
 
-  const newDesign = getNewDesign(designPreset, isDark);
+  const newDesign = getNewDesign(designPreset, isDark, area);
   if (newDesign) return newDesign;
 
   // 1. OLED Pure Black (iPhone Pro Display Look)

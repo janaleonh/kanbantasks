@@ -19,8 +19,9 @@ import { Ionicons } from '@expo/vector-icons';
 import type { Task, TaskPriority } from '../db/taskRepo';
 import type { TaskList } from '../db/taskListRepo';
 import { useTheme } from '../hooks/useTheme';
+import { getDatabase } from '../db/database';
 import { useRouter } from 'expo-router';
-import { TaskDetailsEditor } from './TaskDetailsEditor';
+import { Subtasks, TaskDetailsEditor } from './TaskDetailsEditor';
 import type { TaskUpdates } from '../db/taskRepo';
 import { getTaskById } from '../db/taskRepo';
 import type { ChecklistItem, RepeatRule, TaskAttachment } from '../tasks/details';
@@ -64,6 +65,23 @@ export function EditTaskModal({
 }: EditTaskModalProps) {
   const theme = useTheme();
   const router = useRouter();
+  const [sourceNote,setSourceNote]=useState<{id:string;title:string}|null>(null);
+  useEffect(()=>{
+    let live=true;setSourceNote(null);
+    if(task && visible)void getDatabase().then(db=>db.getFirstAsync<{id:string;title:string}>(
+      'SELECT n.id,n.title FROM notes n JOIN note_tasks link ON link.noteId=n.id WHERE link.taskId=?',[task.id]
+    )).then(row=>{if(live)setSourceNote(row);}).catch(()=>{});
+    return ()=>{live=false;};
+  },[task?.id,visible]);
+  const [scan, setScan] = useState<{ id: string; name: string } | null>(null);
+  useEffect(() => {
+    let active = true;
+    setScan(null);
+    if (task && visible) void getDatabase().then(db => db.getFirstAsync<{id: string; name: string}>(
+      'SELECT s.id,s.name FROM scans s JOIN scan_tasks t ON t.scanId=s.id WHERE t.taskId=?', [task.id]
+    )).then(row => { if (active) setScan(row); }).catch(() => {});
+    return () => { active = false; };
+  }, [task?.id, visible]);
   const [recurrence, setRecurrence] = useState<RepeatRule | null>(null);
   const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
   const [attachments, setAttachments] = useState<TaskAttachment[]>([]);
@@ -81,10 +99,12 @@ export function EditTaskModal({
   const [selectedListId, setSelectedListId] = useState<string>('');
   const insets = initialWindowMetrics?.insets ?? { bottom: 24, top: 0, left: 0, right: 0 };
   const { height: screenHeight } = useWindowDimensions();
+  const [expanded, setExpanded] = useState(false);
   const formRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
 
   useEffect(() => {
-    if (task) {
+    if (task && visible) {
+      setExpanded(false);
       setTitle(task.title);
       setNotes(task.notes || '');
       setStatus(task.status);
@@ -99,7 +119,8 @@ export function EditTaskModal({
       setTags((task.tags || []).join(', '));
       setShowDuePicker(false);
     }
-  }, [task]);
+    // A background refresh may replace the task object while the user is typing.
+  }, [task?.id, visible]);
 
   if (!task) return null;
 
@@ -298,12 +319,7 @@ export function EditTaskModal({
             />
           </View>
 
-          {/* List Selection */}
-          <View style={styles.field}>
-            <Text style={[styles.label, { color: theme.subtext }]}>PROJEKT & TAGS</Text>
-            <TextInput accessibilityLabel="Projekt" value={project} onChangeText={setProject} maxLength={80} placeholder="Projekt, z. B. Renovierung" placeholderTextColor={theme.subtext} style={[styles.notesInput, { color: theme.text, backgroundColor: theme.cardBg, minHeight: 45, borderRadius: 12, marginBottom: 8 }]} />
-            <TextInput accessibilityLabel="Tags, durch Komma getrennt" value={tags} onChangeText={setTags} placeholder="Tags: privat, wichtig" placeholderTextColor={theme.subtext} style={[styles.notesInput, { color: theme.text, backgroundColor: theme.cardBg, minHeight: 45, borderRadius: 12 }]} />
-          </View>
+          <Subtasks checklist={checklist} onChecklist={setChecklist} />
           <View style={styles.field}>
             <Text style={[styles.label, { color: theme.subtext }]}>LISTE</Text>
             <ScrollView
@@ -340,6 +356,74 @@ export function EditTaskModal({
             </ScrollView>
           </View>
 
+          {/* Due Date Quick Picker */}
+          {showDuePicker && <DateTimePicker mode="date" display={Platform.OS === 'ios' ? 'inline' : 'default'} value={due ? new Date(due) : new Date()} onChange={(event, date) => { if (Platform.OS !== 'ios' || event.type === 'dismissed') setShowDuePicker(false); if (date) { date.setHours(12, 0, 0, 0); setDue(date.toISOString()); } }} />}
+          <View style={styles.field}>
+            <Text style={[styles.label, { color: theme.subtext }]}>
+              FÄLLIGKEITSDATUM{' '}
+              {due
+                ? `(${new Date(due).toLocaleDateString('de-DE', {
+                    day: '2-digit',
+                    month: 'short',
+                    year: 'numeric',
+                  })})`
+                : '(Keins)'}
+            </Text>
+            <View style={styles.chipRow}>
+              <TouchableOpacity
+                style={[styles.chip, { backgroundColor: theme.cardBg }]}
+                onPress={() => setRelativeDue(0)}
+              >
+                <Ionicons name="today-outline" size={15} color="#FF9500" />
+                <Text style={[styles.chipText, { color: theme.text }]}>
+                  Heute
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.chip, { backgroundColor: theme.cardBg }]}
+                onPress={() => setRelativeDue(1)}
+              >
+                <Ionicons
+                  name="calendar-outline"
+                  size={15}
+                  color={theme.accent}
+                />
+                <Text style={[styles.chipText, { color: theme.text }]}>
+                  Morgen
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.chip, { backgroundColor: theme.cardBg }]}
+                onPress={() => setRelativeDue(7)}
+              >
+                <Ionicons name="time-outline" size={15} color="#34C759" />
+                <Text style={[styles.chipText, { color: theme.text }]}>
+                  +7 Tage
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity accessibilityRole="button" onPress={() => setShowDuePicker(value => !value)} style={[styles.chip, { backgroundColor: theme.cardBg }]}><Ionicons name="calendar-number-outline" size={15} color={theme.accent} /><Text style={[styles.chipText, { color: theme.text }]}>Datum wählen</Text></TouchableOpacity>
+              {due ? (
+                <TouchableOpacity
+                  style={[styles.chip, { backgroundColor: theme.cardBg }]}
+                  onPress={() => setRelativeDue(null)}
+                >
+                  <Ionicons name="close-circle" size={15} color="#FF3B30" />
+                  <Text style={[styles.chipText, { color: '#FF3B30' }]}>
+                    Keins
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          </View>
+
+          <TouchableOpacity accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setExpanded(!expanded)} style={{ paddingVertical: 14 }}><Text style={{ color: theme.accent }}>Weitere Details {expanded ? "▴" : "▾"}</Text></TouchableOpacity>
+          {expanded && <>
+          {/* List Selection */}
+          <View style={styles.field}>
+            <Text style={[styles.label, { color: theme.subtext }]}>PROJEKT & TAGS</Text>
+            <TextInput accessibilityLabel="Projekt" value={project} onChangeText={setProject} maxLength={80} placeholder="Projekt, z. B. Renovierung" placeholderTextColor={theme.subtext} style={[styles.notesInput, { color: theme.text, backgroundColor: theme.cardBg, minHeight: 45, borderRadius: 12, marginBottom: 8 }]} />
+            <TextInput accessibilityLabel="Tags, durch Komma getrennt" value={tags} onChangeText={setTags} placeholder="Tags: privat, wichtig" placeholderTextColor={theme.subtext} style={[styles.notesInput, { color: theme.text, backgroundColor: theme.cardBg, minHeight: 45, borderRadius: 12 }]} />
+          </View>
           {/* Status (Offen / Erledigt) */}
           <View style={styles.field}>
             <Text style={[styles.label, { color: theme.subtext }]}>STATUS</Text>
@@ -487,70 +571,13 @@ export function EditTaskModal({
             </View>
           </View>
 
-          {/* Due Date Quick Picker */}
-          {showDuePicker && <DateTimePicker mode="date" display={Platform.OS === 'ios' ? 'inline' : 'default'} value={due ? new Date(due) : new Date()} onChange={(event, date) => { if (Platform.OS !== 'ios' || event.type === 'dismissed') setShowDuePicker(false); if (date) { date.setHours(12, 0, 0, 0); setDue(date.toISOString()); } }} />}
-          <View style={styles.field}>
-            <Text style={[styles.label, { color: theme.subtext }]}>
-              FÄLLIGKEITSDATUM{' '}
-              {due
-                ? `(${new Date(due).toLocaleDateString('de-DE', {
-                    day: '2-digit',
-                    month: 'short',
-                    year: 'numeric',
-                  })})`
-                : '(Keins)'}
-            </Text>
-            <View style={styles.chipRow}>
-              <TouchableOpacity
-                style={[styles.chip, { backgroundColor: theme.cardBg }]}
-                onPress={() => setRelativeDue(0)}
-              >
-                <Ionicons name="today-outline" size={15} color="#FF9500" />
-                <Text style={[styles.chipText, { color: theme.text }]}>
-                  Heute
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.chip, { backgroundColor: theme.cardBg }]}
-                onPress={() => setRelativeDue(1)}
-              >
-                <Ionicons
-                  name="calendar-outline"
-                  size={15}
-                  color={theme.accent}
-                />
-                <Text style={[styles.chipText, { color: theme.text }]}>
-                  Morgen
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.chip, { backgroundColor: theme.cardBg }]}
-                onPress={() => setRelativeDue(7)}
-              >
-                <Ionicons name="time-outline" size={15} color="#34C759" />
-                <Text style={[styles.chipText, { color: theme.text }]}>
-                  +7 Tage
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity accessibilityRole="button" onPress={() => setShowDuePicker(value => !value)} style={[styles.chip, { backgroundColor: theme.cardBg }]}><Ionicons name="calendar-number-outline" size={15} color={theme.accent} /><Text style={[styles.chipText, { color: theme.text }]}>Datum wählen</Text></TouchableOpacity>
-              {due ? (
-                <TouchableOpacity
-                  style={[styles.chip, { backgroundColor: theme.cardBg }]}
-                  onPress={() => setRelativeDue(null)}
-                >
-                  <Ionicons name="close-circle" size={15} color="#FF3B30" />
-                  <Text style={[styles.chipText, { color: '#FF3B30' }]}>
-                    Keins
-                  </Text>
-                </TouchableOpacity>
-              ) : null}
-            </View>
-          </View>
-
           <TaskDetailsEditor recurrence={recurrence} checklist={checklist} attachments={attachments} onRecurrence={setRecurrence} onChecklist={setChecklist} onAttachments={setAttachments} onOpenAttachment={attachment => {
             if (useDocumentStore.getState().config?.id !== attachment.configId) { Alert.alert('Andere NAS-Verbindung', 'Dieses Dokument gehört zu einer anderen NAS-Verbindung. Verbinde zuerst das zugehörige NAS.'); return; }
             void handleSave().then(saved => { if (saved) router.push({ pathname: '/document', params: { path: attachment.path, taskId: task.id } }); });
           }} />
+          </>}
+          {sourceNote && <TouchableOpacity accessibilityRole="button" disabled={saving} onPress={()=>void handleSave().then(saved=>{if(saved)router.push({pathname:'/note',params:{id:sourceNote.id}});})} style={{padding:14}}><Text style={{color:theme.accent}}>Ursprüngliche Notiz öffnen · {sourceNote.title||'Ohne Titel'}</Text></TouchableOpacity>}
+          {scan && <TouchableOpacity disabled={saving} onPress={() => void handleSave().then(saved => { if (saved) router.push({ pathname: '/scan', params: { id: scan.id } }); })} style={{ padding: 14 }}><Text style={{ color: theme.accent }}>Beleg öffnen · {scan.name}</Text></TouchableOpacity>}
           {status === 'needsAction' && <TouchableOpacity accessibilityRole="button" disabled={saving} onPress={() => { void handleSave().then(saved => { if (saved) router.push({ pathname: '/focus', params: { taskId: task.id } }); }); }} style={{ padding: 14, borderRadius: 12, backgroundColor: theme.pillBg, marginTop: 12 }}><Text style={{ color: theme.accent, fontWeight: '700', textAlign: 'center' }}>Mit dieser Aufgabe fokussieren</Text></TouchableOpacity>}
         </ScrollView>
 

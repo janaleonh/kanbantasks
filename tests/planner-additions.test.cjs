@@ -146,3 +146,37 @@ test('scanner rejects foreign paths and non-PDF results; cancellation leaves no 
   const canceled = scannerFixture({ canceled: true }); assert.equal(await canceled.scanner.scanDocument(), null);
   assert.equal(canceled.records.length, 0);
 });
+
+test('fixed folder sync keeps NAS-only files and uses a version check for changed iPhone files', async () => {
+  class DavError extends Error { constructor(status) { super(); this.status = status; } }
+  let hash = 'first', version = 'v1', remoteHash;
+  const writes = [], settings = new Map([['iphone-folder:nas', JSON.stringify({ id:'link', folder:'Docs', bookmark:'access' })]]);
+  class File {
+    constructor(uri) { this.source = uri === 'snapshot'; }
+    get md5() { return this.source ? hash : remoteHash; }
+    get exists() { return true; }
+    create() {} delete() {} writableStream() { return {}; }
+  }
+  const client = {
+    ensureDirectory: async () => {}, stat: async () => { if (!version) throw new DavError(404); return { etag: version }; },
+    download: async () => ({ etag: version }),
+    upload: async (folder, source, signal, previous) => { writes.push([folder, source.name, previous]); remoteHash = hash; version ||= 'v2'; }
+  };
+  const { syncFolder } = load('src/documents/folderSync.ts', {
+    './webdav': { DavError },
+    expo: { requireOptionalNativeModule: () => ({ entries: async () => [{path:'a.pdf',kind:'file'}], snapshot: async () => 'snapshot' }) },
+    'expo-file-system': { File, Paths:{cache:'cache'} }, 'react-native': { AppState:{currentState:'active'} },
+    '../db/database': { getSetting: async (k,d) => settings.get(k) ?? d, setSetting: async (k,v) => settings.set(k,v) },
+    '../stores/useDocumentStore': { useDocumentStore:{getState:()=>({config:{id:'nas'}})}, nasWrite: async (_,fn)=>fn({client, signal:new AbortController().signal, assert() {}}) },
+    '../stores/usePrivacyStore': { usePrivacyStore:{getState:()=>({initialized:true, locked:false})} },
+    '../utils/uuid': { generateUUID: randomUUID },
+  });
+  await syncFolder(); await syncFolder(); hash = 'changed'; await syncFolder();
+  assert.deepEqual(writes, [['Docs','a.pdf',undefined], ['Docs','a.pdf','v1']]);
+  version = 'remote-edit';
+  await syncFolder();
+  assert.equal(writes.length, 2);
+  version = null;
+  await syncFolder();
+  assert.deepEqual(writes[2], ['Docs','a.pdf',undefined]);
+});

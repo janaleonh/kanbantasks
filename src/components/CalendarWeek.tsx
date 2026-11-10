@@ -7,6 +7,7 @@ import { useTheme } from '../hooks/useTheme';
 import { CalendarAgenda } from './CalendarAgenda';
 
 interface CalendarWeekProps {
+  diaryDays?: string[];
   days: Date[];
   selectedDay: string;
   todayKey: string;
@@ -18,7 +19,7 @@ interface CalendarWeekProps {
   onSelectDay?: (date: Date) => void;
 }
 
-export function CalendarWeek({ days, selectedDay, todayKey, eventsByMonth, selectedIds, loadingMonths, error, onAddEvent, onSelectDay }: CalendarWeekProps) {
+export function CalendarWeek({ diaryDays=[], days, selectedDay, todayKey, eventsByMonth, selectedIds, loadingMonths, error, onAddEvent, onSelectDay }: CalendarWeekProps) {
   const theme = useTheme();
   const { width } = useWindowDimensions();
   const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
@@ -40,7 +41,7 @@ export function CalendarWeek({ days, selectedDay, todayKey, eventsByMonth, selec
         const loading = loadingMonths.includes(key);
         return <View key={id} style={[styles.day, { width: columnWidth, backgroundColor: theme.columnBg, borderRadius: theme.columnRadius, borderColor: isToday ? theme.accent : theme.border }]}>
           <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Tagesansicht für ${date.toLocaleDateString('de-DE')} öffnen`} disabled={!onSelectDay} onPress={() => onSelectDay?.(date)} style={[styles.dayHeader, { borderBottomColor: theme.border }]}>
-            <Text accessibilityRole="header" style={[styles.weekday, { color: isToday ? theme.accent : theme.subtext }]}>{date.toLocaleDateString('de-DE', { weekday: 'long' })}{isToday ? ' · Heute' : ''}</Text>
+            <Text accessibilityRole="header" style={[styles.weekday, { color: isToday ? theme.accent : theme.subtext }]}>{date.toLocaleDateString('de-DE', { weekday: 'long' })}{isToday ? ' · Heute' : ''}{diaryDays.includes(id) && <Ionicons name="book-outline" size={14} color={theme.accent}/>}</Text>
             <Text style={[styles.date, { color: theme.text }]}>{date.toLocaleDateString('de-DE', { day: 'numeric', month: 'short' })}</Text>
           </TouchableOpacity>
           <View style={styles.events}>

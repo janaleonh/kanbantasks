@@ -24,13 +24,14 @@
       "bundleIdentifier": "com.janasue.kanbantasks",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "NSCameraUsageDescription": "Planner verwendet die Kamera, um Dokumente als PDF zu scannen.",
+        "NSCameraUsageDescription": "Planner verwendet die Kamera für Dokumentenscans und Tagebuchfotos.",
         "NSLocalNetworkUsageDescription": "Planner verbindet sich mit deinem Synology NAS im Heimnetz, um ausgewählte Dokumente offline bereitzuhalten und von dir ausgewählte Dateien hochzuladen."
       },
       "icon": "./assets/icon.png"
     },
     "plugins": [
       "expo-router",
+      ["expo-image-picker", {"photosPermission": "Wähle Fotos für dein Tagebuch aus.", "cameraPermission": "Planner verwendet die Kamera für Dokumentenscans und Tagebuchfotos.", "microphonePermission": false}],
       "expo-sqlite",
       "expo-secure-store",
       "expo-notifications",
@@ -80,7 +81,10 @@
             "appGroupId": "group.com.janasue.kanbantasks",
             "activationRule": {
               "supportsText": true,
-              "supportsWebUrlWithMaxCount": 1
+              "supportsWebUrlWithMaxCount": 1,
+                "supportsImageWithMaxCount": 10,
+                "supportsFileWithMaxCount": 10,
+                "supportsAttachmentsWithMaxCount": 10
             }
           },
           "android": {
@@ -99,7 +103,8 @@
           "faceIDPermission": "Planner verwendet Face ID, um deine Aufgaben, Kalender und Dokumente zu schützen."
         }
       ],
-      "./plugins/withNotificationAppIcons"
+      "./plugins/withNotificationAppIcons",
+      "./plugins/withPlannerShare"
     ],
     "experiments": {
       "typedRoutes": true,

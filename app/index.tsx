@@ -4,15 +4,21 @@ import {
   Text,
   StyleSheet,
   ActivityIndicator,
+
+  Modal,
+  Pressable,
+  ScrollView,
   TouchableOpacity,
-  TextInput,
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import PlannerCalendar from '../src/components/PlannerCalendar';
+import PlannerDocuments from '../src/components/PlannerDocuments';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
+import { PlannerNotes } from '../src/components/PlannerNotes';
 import { KanbanBoard } from '../src/components/KanbanBoard';
 import { UndoBanner } from '../src/components/UndoBanner';
 import { EditTaskModal } from '../src/components/EditTaskModal';
@@ -20,13 +26,36 @@ import { SyncStatusBadge } from '../src/components/SyncStatusBadge';
 import { LiquidGlassBackground } from '../src/components/LiquidGlassBackground';
 import { useKanbanStore } from '../src/stores/useKanbanStore';
 import { useSyncOnReconnect } from '../src/hooks/useSyncOnReconnect';
-import { useTheme } from '../src/hooks/useTheme';
+import { BoardToday } from '../src/components/BoardToday';
+import { ThemeArea, useTheme } from '../src/hooks/useTheme';
 import { loadCachedUser, type GoogleUser } from '../src/auth/googleAuth';
 import type { Task } from '../src/db/taskRepo';
 
+import Animated, { useAnimatedStyle, withTiming, ReduceMotion } from 'react-native-reanimated';
+import { useHorizontalPaging } from '../src/hooks/useHorizontalPaging';
+
+const mainTabs = [
+  { id: 'board', label: 'Board', icon: 'albums-outline' },
+  { id: 'calendar', label: 'Kalender', icon: 'calendar-outline' },
+  { id: 'notes', label: 'Notizen', icon: 'document-text-outline' },
+  { id: 'documents', label: 'Dokumente', icon: 'folder-outline' },
+] as const;
+
 export default function HomeScreen() {
   const router = useRouter();
-  const { widget } = useLocalSearchParams<{ widget?: string }>();
+  const [menuOpen,setMenuOpen]=useState(false);
+  const [pickingList,setPickingList]=useState(false);
+  const [compose,setCompose]=useState<{listId:string}>();
+  const { widget, tab, noteFolder, createdTask } = useLocalSearchParams<{ widget?: string; tab?: string; noteFolder?: string; createdTask?:string }>();
+  useEffect(()=>{if(!createdTask)return;const timer=setTimeout(()=>router.setParams({createdTask:''}),7000);return ()=>clearTimeout(timer);},[createdTask,router]);
+  const calendarActive = tab === 'calendar' || tab === 'diary';
+  const documentsActive = tab === 'documents';
+  const notesActive = tab === 'notes';
+  const boardActive = !calendarActive && !documentsActive && !notesActive;
+  const [documentsVisited, setDocumentsVisited] = useState(documentsActive);
+  useEffect(() => { if (documentsActive) setDocumentsVisited(true); }, [documentsActive]);
+  const [calendarVisited, setCalendarVisited] = useState(calendarActive);
+  useEffect(() => { if (calendarActive) setCalendarVisited(true); }, [calendarActive]);
   const theme = useTheme();
   const {
     taskLists,
@@ -37,7 +66,6 @@ export default function HomeScreen() {
     showCompletedByDefault,
     boardLayout,
     columnWidth,
-    searchQuery,
     loadAll,
     syncWithGoogle,
     addTaskList,
@@ -67,7 +95,7 @@ export default function HomeScreen() {
 
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [isModalVisible, setIsModalVisible] = useState(false);
-  const [showSearchBar, setShowSearchBar] = useState(false);
+
   const [user, setUser] = useState<GoogleUser | null>(null);
   const [widthToast, setWidthToast] = useState<string | null>(null);
   const toastTimeoutRef = React.useRef<any>(null);
@@ -110,22 +138,6 @@ export default function HomeScreen() {
     () => taskLists.filter((l) => l.isVisible),
     [taskLists]
   );
-
-  const filteredTasksByList = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    const result: Record<string, Task[]> = {};
-    for (const listId of Object.keys(tasksByList)) {
-      result[listId] = (tasksByList[listId] || []).filter((t) => {
-        if (q) {
-          const matchTitle = t.title.toLowerCase().includes(q);
-          const matchNotes = (t.notes || '').toLowerCase().includes(q);
-          if (!matchTitle && !matchNotes) return false;
-        }
-        return true;
-      });
-    }
-    return result;
-  }, [tasksByList, searchQuery]);
 
   const stats = useMemo(() => {
     let pending = taskLists.filter((l) => l.syncStatus === 'pending').length;
@@ -193,42 +205,38 @@ export default function HomeScreen() {
     setBoardLayout(boardLayout === 'horizontal' ? 'vertical' : 'horizontal');
   }, [boardLayout, setBoardLayout]);
 
-  const handleQuickAddTask = useCallback(() => {
-    const firstList = visibleLists[0];
-    if (!firstList) {
-      Alert.alert('Keine Liste', 'Bitte erstelle zuerst eine Liste.');
-      return;
-    }
-    Alert.prompt(
-      `Neue Aufgabe (${firstList.title})`,
-      'Titel der Aufgabe eingeben:',
-      [
-        { text: 'Abbrechen', style: 'cancel' },
-        {
-          text: 'Hinzufügen',
-          onPress: (txt?: string) => {
-            if (txt?.trim()) {
-              addTask(firstList.id, txt.trim());
-            }
-          },
-        },
-      ],
-      'plain-text'
-    );
-  }, [visibleLists, addTask]);
+  const handleQuickAddTask = () => {
+    if (!visibleLists.length) {Alert.alert('Keine sichtbare Liste','Erstelle eine Liste oder blende eine vorhandene Liste ein.');return;}
+    if (visibleLists.length===1) {setCompose({listId:visibleLists[0].id});return;}
+    setPickingList(true);
+    setMenuOpen(true);
+  };
 
-  if (isLoading && taskLists.length === 0) {
-    return (
-      <View
-        style={[styles.loadingContainer, { backgroundColor: theme.background }]}
-      >
-        <ActivityIndicator size="large" color={theme.accent} />
-        <Text style={[styles.loadingText, { color: theme.subtext }]}>
-          Lade Erinnerungen...
-        </Text>
-      </View>
-    );
-  }
+  const activeTab = calendarActive ? 'calendar' : notesActive ? 'notes' : documentsActive ? 'documents' : 'board';
+  const openTab = useCallback((id: typeof mainTabs[number]['id']) => {
+    if (id === activeTab) return;
+    router.setParams({ tab: id, noteFolder: '' });
+    if (id === 'board') setDueFilter('all');
+  }, [activeTab, router, setDueFilter]);
+  const boardActions = [
+    {label:'Projekte',run:()=>router.push('/projects')},
+    {label:'Verlauf',run:()=>router.push('/history')},
+    {label:'Fokus',run:()=>router.push('/focus')},
+    {label:boardLayout==='horizontal'?'Spalten untereinander anzeigen':'Spalten nebeneinander anzeigen',run:toggleLayout},
+    ...(boardLayout==='horizontal'?[{label:'Spaltenbreite ändern',run:handleCycleColumnWidth}]:[]),
+    {label:syncState==='syncing'?'Synchronisierung läuft …':'Mit Google synchronisieren',run:syncWithGoogle,disabled:syncState==='syncing'},
+    {label:'Einstellungen',run:()=>router.push('/settings')},
+  ];
+  const tabIndex = mainTabs.findIndex(item => item.id === activeTab);
+  const swipe = useHorizontalPaging(offset => {
+    const next = mainTabs[tabIndex + offset];
+    if (next) openTab(next.id);
+  });
+  const [dockWidth,setDockWidth]=useState(0);
+  const segmentWidth=Math.max(0,dockWidth-10)/mainTabs.length;
+  const selectionStyle=useAnimatedStyle(()=>({
+    transform:[{translateX:withTiming(tabIndex*segmentWidth,{duration:180,reduceMotion:ReduceMotion.System})}],
+  }));
 
   return (
     <SafeAreaView
@@ -238,7 +246,7 @@ export default function HomeScreen() {
       <LiquidGlassBackground />
 
       {/* Board actions and connection issues */}
-      <View style={styles.header}>
+      <View style={styles.header} {...swipe}>
         <View style={styles.headerNavBar}>
           <Text
             accessibilityRole="header"
@@ -267,41 +275,12 @@ export default function HomeScreen() {
                 style={StyleSheet.absoluteFill}
               />
             )}
-            <TouchableOpacity accessibilityRole="button" accessibilityLabel="Aufgabe schnell erfassen" onPress={() => router.push('/capture')} style={styles.iconPillBtn}>
+            {boardActive && <>
+            <TouchableOpacity accessibilityRole="button" accessibilityLabel="Aufgabe schnell erfassen" onPress={handleQuickAddTask} style={styles.iconPillBtn}>
               <Ionicons name="add-circle-outline" size={22} color={theme.accent} />
             </TouchableOpacity>
             <TouchableOpacity
-              onPress={toggleLayout}
-              style={styles.iconPillBtn}
-              hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-            >
-              <Ionicons
-                name={
-                  boardLayout === 'vertical'
-                    ? 'reorder-four-outline'
-                    : 'albums-outline'
-                }
-                size={19}
-                color={theme.accent}
-              />
-            </TouchableOpacity>
-
-            {boardLayout === 'horizontal' && (
-              <TouchableOpacity
-                onPress={handleCycleColumnWidth}
-                style={styles.iconPillBtn}
-                hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-              >
-                <Ionicons
-                  name="resize-outline"
-                  size={18}
-                  color={theme.accent}
-                />
-              </TouchableOpacity>
-            )}
-
-            <TouchableOpacity
-              onPress={() => setShowSearchBar((prev) => !prev)}
+              accessibilityRole="button" accessibilityLabel="Planner durchsuchen" onPress={() => router.push('/search')}
               style={styles.iconPillBtn}
               hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
             >
@@ -309,26 +288,15 @@ export default function HomeScreen() {
                 name="search-outline"
                 size={19}
                 color={
-                  showSearchBar || searchQuery ? theme.accent : theme.text
+                  theme.text
                 }
               />
             </TouchableOpacity>
 
+            </>}
             <TouchableOpacity
-              onPress={syncWithGoogle}
-              disabled={syncState === 'syncing'}
-              style={styles.iconPillBtn}
-              hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-            >
-              <Ionicons
-                name="sync-outline"
-                size={19}
-                color={syncState === 'syncing' ? theme.subtext : theme.text}
-              />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={() => router.push('/settings')}
+              accessibilityRole="button" accessibilityLabel={boardActive?'Weitere Board-Aktionen':'Einstellungen'}
+              onPress={() => boardActive ? (setPickingList(false),setMenuOpen(true)) : router.push('/settings')}
               style={styles.iconPillBtn}
               hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
             >
@@ -350,49 +318,13 @@ export default function HomeScreen() {
         />
       </View>
 
-      <View style={[styles.viewPicker, { backgroundColor: theme.pillBg }]}>
-        {(['Board', 'Kalender', 'Dokumente'] as const).map((label) => {
-          const active = label === 'Board';
-          return <TouchableOpacity key={label} accessibilityRole="button" accessibilityState={{ selected: active }} onPress={() => label === 'Kalender' ? router.push('/calendar') : label === 'Dokumente' ? router.push('/documents') : setDueFilter('all')} style={[styles.viewOption, { backgroundColor: active ? theme.surface : 'transparent' }]}>
-            <Text style={{ color: active ? theme.text : theme.subtext, fontWeight: '600', fontSize: 14 }}>{label}</Text>
-          </TouchableOpacity>;
-        })}
-      </View>
-
-      <View style={{ flexDirection: 'row', paddingHorizontal: 16, gap: 6, marginBottom: 8 }}>
-        {([{ title: 'Suche', route: '/search' }, { title: 'Projekte', route: '/projects' }, { title: 'Verlauf', route: '/history' }, { title: 'Fokus', route: '/focus' }] as const).map(item => <TouchableOpacity key={item.route} accessibilityRole="button" onPress={() => router.push(item.route)} style={{ flex: 1, paddingVertical: 9, borderRadius: 12, backgroundColor: theme.pillBg, alignItems: 'center' }}><Text style={{ color: theme.text, fontSize: 13, fontWeight: '600' }}>{item.title}</Text></TouchableOpacity>)}
-      </View>
+      {notesActive && <ThemeArea.Provider value="notes"><PlannerNotes key={noteFolder} initialFolder={noteFolder} /></ThemeArea.Provider>}
+      {(calendarVisited || calendarActive) && <View style={{ flex: 1, display: calendarActive ? 'flex' : 'none' }}><ThemeArea.Provider value="calendar"><PlannerCalendar active={calendarActive} /></ThemeArea.Provider></View>}
+      {(documentsVisited || documentsActive) && <View style={{ flex: 1, display: documentsActive ? 'flex' : 'none' }}><ThemeArea.Provider value="documents"><PlannerDocuments active={documentsActive} /></ThemeArea.Provider></View>}
+      {boardActive && isLoading && !taskLists.length ? <View style={styles.loadingContainer}><ActivityIndicator color={theme.accent}/><Text style={{color:theme.subtext}}>Lade Erinnerungen…</Text></View> : <View style={{ flex: 1, display: boardActive ? 'flex' : 'none' }}>
+      {boardActive && <BoardToday tasks={visibleLists.flatMap(list=>tasksByList[list.id]??[])} onEdit={handleEditTask}/>}
+      {!!createdTask && <TouchableOpacity accessibilityRole="button" onPress={()=>{router.setParams({createdTask:''});router.push({pathname:'/task',params:{id:createdTask}});}} style={{padding:12,backgroundColor:theme.pillBg}}><Text style={{color:theme.accent}}>Aufgabe erstellt · Öffnen</Text></TouchableOpacity>}
       <UndoBanner />
-      {/* Search Bar */}
-      {showSearchBar && (
-        <View style={styles.searchContainer}>
-          <View
-            style={[
-              styles.searchInputBox,
-              {
-                backgroundColor: theme.inputBg,
-                borderColor: theme.glassBorderBright,
-              },
-            ]}
-          >
-            <Ionicons name="search" size={16} color={theme.subtext} />
-            <TextInput
-              style={[styles.searchInput, { color: theme.text }]}
-              placeholder="Suchen"
-              placeholderTextColor={theme.subtext}
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              autoFocus
-            />
-            {searchQuery ? (
-              <TouchableOpacity onPress={() => setSearchQuery('')}>
-                <Ionicons name="close-circle" size={16} color={theme.subtext} />
-              </TouchableOpacity>
-            ) : null}
-          </View>
-        </View>
-      )}
-
       {/* Not logged in banner */}
       {!user && taskLists.length === 0 ? (
         <View
@@ -427,8 +359,9 @@ export default function HomeScreen() {
 
       {/* Kanban Board */}
       <KanbanBoard
+        compose={compose}
         taskLists={visibleLists}
-        tasksByList={filteredTasksByList}
+        tasksByList={tasksByList}
         layoutMode={boardLayout}
         columnWidth={columnWidth}
         showCompletedByDefault={showCompletedByDefault}
@@ -486,13 +419,46 @@ export default function HomeScreen() {
         onMoveTask={moveTask}
         onDelete={removeTask}
       />
+      </View>}
+      <View accessibilityRole="tablist" {...swipe} onLayout={e=>setDockWidth(e.nativeEvent.layout.width)} style={[styles.viewPicker, { backgroundColor:theme.pillBg,borderColor:theme.border }]}>
+        {(theme.isGlass || theme.preset==='studio') && <BlurView pointerEvents="none" intensity={45} tint={theme.isDark?'dark':'light'} style={StyleSheet.absoluteFill}/>}
+        {segmentWidth>0 && <Animated.View pointerEvents="none" style={[{position:'absolute',left:4,top:4,bottom:4,width:segmentWidth,borderRadius:19,backgroundColor:theme.surface},selectionStyle]}/>}
+
+        {mainTabs.map(item => {
+          const selected = item.id === activeTab;
+          const color = selected ? theme.accent : theme.subtext;
+          return <TouchableOpacity key={item.id} accessibilityRole="tab" accessibilityState={{selected}}
+            onPress={() => openTab(item.id)} style={styles.viewOption}>
+            <Ionicons name={item.icon} size={21} color={color}/>
+            <Text style={{color,fontWeight:selected?'700':'500',fontSize:12}}>{item.label}</Text>
+          </TouchableOpacity>;
+        })}
+      </View>
+      <Modal visible={boardActive && menuOpen} transparent animationType="fade" onRequestClose={()=>setMenuOpen(false)}>
+        <View style={{flex:1,justifyContent:'center',paddingHorizontal:24,paddingVertical:32}}>
+          <Pressable accessible={false} onPress={()=>setMenuOpen(false)} style={[StyleSheet.absoluteFill,{backgroundColor:'rgba(0,0,0,0.4)'}]}/>
+          <View accessibilityViewIsModal style={{maxHeight:'100%',borderRadius:18,padding:14,backgroundColor:theme.cardBg}}>
+            <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between'}}>
+              <Text accessibilityRole="header" style={{fontSize:19,fontWeight:'700',color:theme.text}}>{pickingList?'Aufgabe in welcher Liste?':'Board-Aktionen'}</Text>
+              <Pressable accessibilityRole="button" accessibilityLabel="Menü schließen" onPress={()=>setMenuOpen(false)} style={{padding:12}}>
+                <Ionicons name="close" size={22} color={theme.text}/>
+              </Pressable>
+            </View>
+            <ScrollView keyboardShouldPersistTaps="handled">{pickingList ? visibleLists.map(list=><TouchableOpacity accessibilityRole="button" key={list.id} onPress={()=>{setMenuOpen(false);setCompose({listId:list.id});}} style={{padding:14}}><Text style={{color:theme.text}}>{list.title}</Text></TouchableOpacity>) : boardActions.map(action=>
+              <TouchableOpacity key={action.label} accessibilityRole="button" disabled={action.disabled} accessibilityState={{disabled:!!action.disabled}}
+                onPress={()=>{setMenuOpen(false);void action.run();}} style={{minHeight:44,justifyContent:'center',paddingHorizontal:8}}>
+                <Text style={{color:action.disabled?theme.subtext:theme.text,fontSize:16}}>{action.label}</Text>
+              </TouchableOpacity>)}</ScrollView>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  viewPicker: { flexDirection: 'row', borderRadius: 12, marginHorizontal: 16, marginTop: 8, marginBottom: 12, padding: 4 },
-  viewOption: { flex: 1, paddingVertical: 10, borderRadius: 9, alignItems: 'center' },
+  viewPicker: { flexDirection: 'row', overflow:'hidden',borderWidth:1,borderRadius:24, marginHorizontal: 16, marginTop: 8, marginBottom: 2, padding: 4 },
+  viewOption: { flex: 1, minHeight: 48, justifyContent: 'center', gap: 2, borderRadius: 9, alignItems: 'center' },
   container: {
     flex: 1,
   },

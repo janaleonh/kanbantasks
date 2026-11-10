@@ -378,3 +378,187 @@ test('redacting scheduled reminders preserves due time and removes original noti
   assert.ok(!JSON.stringify(scheduled).includes('Privat'));
   assert.deepEqual(canceled, []);
 });
+
+test('a scan task is created atomically with due date and local PDF link', async () => {
+  const { repo, raw } = await database();
+  raw.prepare('INSERT INTO scans VALUES (?,?,?,?,?)').run('pdf', 'Beleg.pdf', 1, 100, '2026-11-07');
+  const due = '2026-11-10T12:00:00.000Z';
+  const id = await repo.captureTask('Beleg prüfen', '', 'list', 'capture:scan', { id: 'pdf', due });
+  assert.equal(raw.prepare('SELECT due FROM tasks WHERE id=?').get(id).due, due);
+  assert.equal(raw.prepare('SELECT scanId FROM scan_tasks WHERE taskId=?').get(id).scanId, 'pdf');
+  assert.equal(await repo.captureTask('Beleg prüfen', '', 'list', 'capture:scan', { id: 'pdf', due }), id);
+  await assert.rejects(repo.captureTask('Fehlt', '', 'list', 'another', { id: 'gone', due }));
+  assert.equal(raw.prepare("SELECT count(*) n FROM tasks WHERE title='Fehlt'").get().n, 0);
+});
+
+test('logged bleeding and the recorded last day override only the current period estimate', () => {
+  const { cycleDay } = load('src/calendar/cycle.ts');
+  const cycle = { starts: ['2026-11-01'], length: 28, bleeding: 5, bleedingDays: ['2026-11-02'], ends: {'2026-11-01':'2026-11-02'} };
+  assert.equal(cycleDay(cycle, '2026-11-02'), 'Periode · eingetragen');
+  assert.equal(cycleDay(cycle, '2026-11-03'), null);
+  assert.equal(cycleDay(cycle, '2026-11-29'), 'Periode · geschätzt');
+});
+
+test('scan outbox waits for home and unlock, preserves a conflicting file and binds retries to the chosen NAS', async () => {
+  const { raw, adapter } = await database();
+  const scan = {id:'scan',name:'Beleg.pdf',size:100};
+  raw.prepare('INSERT INTO scans VALUES (?,?,?,?,?)').run(scan.id,scan.name,1,100,'2026-11-07');
+  const nas = { config:{id:'myNAS'}, home:false };
+  const privacy = { initialized:true, locked:true };
+  const calls = [];
+  class DavError extends Error { constructor(status) { super('Konflikt'); this.status=status; } }
+  const outbox = load('src/documents/scanOutbox.ts', {
+    'react-native':{AppState:{currentState:'active'}},
+    '../db/database':{getDatabase:async () => adapter},
+    '../stores/usePrivacyStore':{usePrivacyStore:{getState:() => privacy}},
+    '../stores/useDocumentStore':{useDocumentStore:{getState:() => nas},nasWrite:async (id,work) => work({client:{upload:async (folder,source) => {
+      calls.push([id,folder,source.name]);
+      if (source.name === 'Beleg.pdf') throw new DavError(412);
+    }}})},
+    './scans':{scanFile:() => ({size:100})}, './webdav':{DavError},
+  });
+  const state = () => raw.prepare('SELECT state FROM scan_uploads').get().state;
+  await outbox.enqueueScan(scan,'Rechnungen','myNAS');
+  assert.equal(state(),'waiting');
+  nas.home = true; await outbox.drainScans();
+  assert.equal(calls.length,0);
+  privacy.locked = false; nas.config.id='other'; await outbox.drainScans();
+  assert.equal(calls.length,0);
+  nas.config.id='myNAS'; await outbox.drainScans(); await outbox.drainScans();
+  assert.equal(state(),'conflict'); assert.equal(calls.length,1);
+  nas.home=false;
+  await outbox.enqueueScan({...scan,name:'Neuer Beleg.pdf'},'Rechnungen','myNAS');
+  nas.home=true; await outbox.drainScans();
+  assert.equal(state(),'confirmed');
+  assert.deepEqual(calls[1],['myNAS','Rechnungen','Neuer Beleg.pdf']);
+});
+
+test('notes persist edits, pin order and recover from trash with their files', async () => {
+  const { adapter,raw } = await database();
+  const lib = load('src/notes/library.ts',{
+    'expo-file-system': {Directory:class {exists=false;}, Paths:{document:'/Documents'}},
+    '../db/database':{getDatabase:async()=>adapter},'../utils/uuid':{generateUUID:randomUUID},
+  });
+  const note=lib.blankNote(); note.title='Beleg';note.folder='Privat';note.pinned=1;
+  await lib.saveNote(note); await lib.saveNote(lib.blankNote());
+  assert.equal((await lib.listNotes())[0].id,note.id);
+  raw.prepare('INSERT INTO note_files VALUES (?,?,?,?)').run(randomUUID(),note.id,'Beleg.pdf','application/pdf');
+  await lib.purgeNote(note.id);
+  assert.equal((await lib.noteFiles(note.id)).length,1);
+  await lib.saveNote({...note,state:'trash'});await lib.saveNote({...note,body:'Ergänzt'});
+  assert.equal((await lib.readNote(note.id)).body,'Ergänzt');
+  assert.equal((await lib.noteVersions(note.id))[0].title,'Beleg');
+  await lib.saveNote({...note,state:'trash'});await lib.purgeNote(note.id);
+  assert.equal(await lib.readNote(note.id),null);
+  assert.equal((await lib.noteFiles(note.id)).length,0);
+});
+
+test('two deliveries of identical text become separate tasks, while a retry is idempotent', async () => {
+  const { repo,raw } = await database();
+  const payload = JSON.stringify([{type:'text',value:'Termin klären',mimeType:'text/plain'}]);
+  const deleted = [];
+  class File { exists=true; size=128; constructor(_,name){ this.name=name; } text(){return payload;} delete(){deleted.push(this.name);} }
+  const incoming = load('src/notes/incoming.ts',{
+    'expo-file-system':{Paths:{appleSharedContainers:{'group.com.janasue.kanbantasks':{uri:'file:///group'}}},File},
+    '../db/taskRepo':repo, './library':{},
+  });
+  const first=randomUUID(), second=randomUUID();
+  await Promise.all([incoming.receiveShare(first),incoming.receiveShare(first),incoming.receiveShare(second)]);
+  assert.equal(raw.prepare("SELECT count(*) n FROM tasks WHERE title='Termin klären'").get().n,2);
+  assert.equal(deleted.length,2);
+});
+
+test('shared photos are copied together and an import failure preserves the delivery for retry', async () => {
+  const id=randomUUID(), group='file:///group', uri=group+'/PlannerIncoming/'+randomUUID()+'/Foto%201.jpg';
+  let copies=0, fail=true;
+  const deleted=[];
+  class File {
+    exists=true; size=20;
+    constructor(root,name){this.uri=name?root.uri+'/'+name:root;}
+    async text(){return JSON.stringify([{type:'image',value:uri,mimeType:'image/jpeg'}]);}
+    delete(){deleted.push(this.uri);}
+  }
+  const incoming=load('src/notes/incoming.ts',{
+    'expo-file-system':{Paths:{appleSharedContainers:{'group.com.janasue.kanbantasks':{uri:group}}},File},
+    '../db/taskRepo':{}, './library':{blankNote:id=>({id}),attachFiles:async(n,files)=>{
+      assert.equal(n.folder,'Eingang');assert.equal(files[0].name,'Foto 1.jpg');
+      if(fail)throw Error('Voll');copies++;
+    }},
+  });
+  await assert.rejects(incoming.receiveShare(id),/Voll/);
+  assert.deepEqual(deleted,[]);fail=false;
+  assert.equal(await incoming.receiveShare(id),'note');assert.equal(copies,1);
+  assert.ok(deleted.includes(uri));
+});
+
+test('task capture links the source note atomically and preserves the task after note deletion',async()=>{
+  const {repo,raw}=await database();
+  const source=randomUUID();
+  raw.prepare("INSERT INTO notes (id,title,updatedAt) VALUES (?,?,?)").run(source,'Umzug','2026-11-08');
+  const id=await repo.captureTask('Stromvertrag kündigen','',null,'note:receipt',undefined,source);
+  assert.equal(raw.prepare('SELECT noteId FROM note_tasks WHERE taskId=?').get(id).noteId,source);
+  assert.equal(await repo.captureTask('Stromvertrag kündigen','',null,'note:receipt',undefined,source),id);
+  raw.prepare('DELETE FROM notes WHERE id=?').run(source);
+  assert.equal(raw.prepare('SELECT count(*) n FROM note_tasks WHERE taskId=?').get(id).n,0);
+  assert.ok(raw.prepare('SELECT id FROM tasks WHERE id=?').get(id));
+  await assert.rejects(repo.captureTask('Fehlender Ursprung','',null,'note:missing',undefined,source));
+  assert.equal(raw.prepare("SELECT count(*) n FROM tasks WHERE title='Fehlender Ursprung'").get().n,0);
+});
+
+test('note templates stay independent and reopen only actual Markdown checkboxes', async()=>{
+  const {adapter,raw}=await database();
+  const lib=load('src/notes/library.ts',{
+    'expo-file-system':{},'../db/database':{getDatabase:async()=>adapter},'../utils/uuid':{generateUUID:randomUUID}
+  });
+  const source={...lib.blankNote(),title:'Packliste',body:'## Reise\n- [X] **Pass**\n- [x] Geld\n- [ ] Buch\nText [x] bleibt',folder:'Reisen',tags:'#Urlaub'};
+  await lib.saveNote(source); await lib.saveTemplate(source);
+  await lib.saveTemplate({...source,title:'Sommerreise'});
+  assert.equal((await lib.listTemplates()).length,1);
+  raw.prepare('DELETE FROM notes WHERE id=?').run(source.id);
+  const first=await lib.createFromTemplate(source.id,'');
+  const second=await lib.createFromTemplate(source.id,'Italien');
+  assert.notEqual(first.id,second.id); assert.equal(first.title,'Sommerreise');
+  assert.equal(first.body,'## Reise\n- [ ] **Pass**\n- [ ] Geld\n- [ ] Buch\nText [x] bleibt');
+  assert.equal(first.folder,'Reisen');assert.equal(second.folder,'Italien');
+  assert.equal(first.tags,'#Urlaub');
+  await lib.deleteTemplate(source.id);
+  assert.ok(await lib.readNote(first.id));await assert.rejects(lib.createFromTemplate(source.id,''));
+});
+
+test('private diary and symptoms persist independently by day', () => {
+  const db = new DatabaseSync(':memory:');
+  const local = load('src/db/journal.ts', {'expo-sqlite': {openDatabaseSync(name) {
+    assert.equal(name, 'planner_private_journal.db');
+    return {
+      execSync: sql => db.exec(sql),
+      runSync: (sql,...args) => db.prepare(sql).run(...args),
+      getFirstSync: (sql,...args) => db.prepare(sql).get(...args),
+      getAllSync: (sql,...args) => db.prepare(sql).all(...args),
+    };
+  }}});
+  const a='2026-11-09', b='2026-11-10';
+  local.writeDiary(a,'Gestern'); local.writeDiary(b,'Heute');
+  assert.deepEqual(local.diaryDays(),[b,a]);
+  const first={name:'Angstzustände',strength:'',note:''};
+  local.writeSymptom(a,first); local.writeSymptom(b,first);
+  local.writeSymptom(a,{...first,strength:'Leicht',note:'Abends'});
+  assert.equal(local.readSymptoms(a).length,1);
+  assert.equal(local.readSymptoms(a)[0].note,'Abends');
+  assert.equal(local.readSymptoms(b)[0].strength,'');
+  local.removeSymptom(a,first.name);
+  local.writeDiary(b,'');
+  assert.deepEqual(local.readSymptoms(a),[]);
+  assert.equal(local.readSymptoms(b).length,1);
+  assert.equal(local.readDiary(a),'Gestern');
+  assert.deepEqual(local.diaryDays(),[a]);
+  local.addDayItem(b,{id:'photo1',kind:'photo',value:'photo1.jpg'});
+  local.addDayItem(b,{id:'place1',kind:'place',value:'Rom'});
+  assert.deepEqual(local.diaryDays(),[b,a]);
+  local.writeDiary(b,'');
+  assert.equal(local.dayItems(b).length,2);
+  local.deleteDayItem(a,'photo1');
+  assert.equal(local.dayItems(b).length,2);
+  local.deleteDayItem(b,'photo1');
+  assert.equal(local.dayItems(b)[0].value,'Rom');
+  db.close();
+});

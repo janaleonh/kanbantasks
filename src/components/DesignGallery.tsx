@@ -49,7 +49,7 @@ export function DesignGallery() {
                   {['Ideen für die neue Woche', 'Zeit für einen Spaziergang'].map((title, i) => (
                     <View key={title} style={{ backgroundColor: preview.cardBg, borderColor: preview.cardBorder, borderWidth: 1, borderRadius: preview.cardRadius, padding: preview.cardPadding, marginBottom: preview.cardGap }}>
                       <Text style={[styles.taskTitle, { color: preview.text }]}>{title}</Text>
-                      {i === 0 && <Text style={[styles.taskNote, { color: preview.subtext }]}>Die besten Gedanken festhalten.</Text>}
+                      {i === 0 && <Text style={[styles.taskNote, { color: preview.subtext }]}>2 von 4 Unteraufgaben</Text>}
                       {i === 0 && <Text style={[styles.taskDate, { color: preview.accent }]}>◷  Heute</Text>}
                     </View>
                   ))}
